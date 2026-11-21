@@ -201,6 +201,7 @@ struct Firv2 : PassInfoMixin<Firv2> {
       new_function->setVisibility(function->getVisibility());
       new_function->setDLLStorageClass(function->getDLLStorageClass());
       new_function->setComdat(function->getComdat());
+      new_function->setCallingConv(function->getCallingConv());
 
       function->replaceUsesWithIf(new_function, [function](Use &use) {
         auto *user_call = dyn_cast<CallBase>(use.getUser());
