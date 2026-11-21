@@ -30,11 +30,17 @@ fn insert_eq_function(item_fn: &mut ItemFn, user_eq_name: &str, function_name: &
     };
 
     item_fn.sig.inputs.iter().for_each(|arg| {
-        let is_ref = match arg {
-            syn::FnArg::Typed(p) => matches!(&*p.ty, syn::Type::Reference(_)),
-            syn::FnArg::Receiver(p) => p.reference.is_some(),
+        let is_shared_ref = match arg {
+            syn::FnArg::Typed(p) => {
+                matches!(&*p.ty, syn::Type::Reference(r) if r.mutability.is_none())
+            }
+            syn::FnArg::Receiver(p) => p.reference.is_some() && p.mutability.is_none(),
         };
-        assert!(is_ref, "arg: {:?} must be a reference", arg.to_token_stream().to_string());
+        assert!(
+            is_shared_ref,
+            "arg: {:?} must be a shared reference",
+            arg.to_token_stream().to_string()
+        );
     });
 
     let return_type = dereference_type(return_type);
