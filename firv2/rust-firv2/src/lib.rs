@@ -76,6 +76,25 @@ fn insert_eq_function(item_fn: &mut ItemFn, user_eq_name: &str, function_name: &
     );
 }
 
+fn insert_drop_function(item_fn: &mut ItemFn, function_name: &str) {
+    let drop_function_name = syn::Ident::new(function_name, Span::call_site().into());
+    let return_type = match &item_fn.sig.output {
+        ReturnType::Type(_, t) => t,
+        _ => panic!("Function must have a return type"),
+    };
+    let return_type = elide_outer_lifetimes(return_type, &item_fn.sig.generics);
+    item_fn.block.stmts.insert(
+        0,
+        syn::parse_quote! {
+                // drop function for the result that is only compared
+                #[inline(never)]
+                unsafe fn #drop_function_name(value: *mut #return_type) {
+                    unsafe { ::core::ptr::drop_in_place(value) }
+                }
+        },
+    );
+}
+
 fn insert_identifier_function(item_fn: &mut ItemFn, function_name: &str) {
     let identifier_function_name = syn::Ident::new(function_name, Span::call_site().into());
     item_fn.block.stmts.insert(
@@ -83,14 +102,24 @@ fn insert_identifier_function(item_fn: &mut ItemFn, function_name: &str) {
         syn::parse_quote! {
         extern "C" {
             // identifier function
-            pub fn #identifier_function_name(eq_function: *const (), hardened_function: *const ());
+            pub fn #identifier_function_name(
+                eq_function: *const (),
+                hardened_function: *const (),
+                drop_function: *const (),
+            );
         }
         },
     );
 }
-fn insert_identifier_call(item_fn: &mut ItemFn, function_name: &str, eq_function_name: &str) {
+fn insert_identifier_call(
+    item_fn: &mut ItemFn,
+    function_name: &str,
+    eq_function_name: &str,
+    drop_function_name: &str,
+) {
     let identifier_function_name = syn::Ident::new(function_name, Span::call_site().into());
     let eq_function_name = syn::Ident::new(eq_function_name, Span::call_site().into());
+    let drop_function_name = syn::Ident::new(drop_function_name, Span::call_site().into());
     let hardened_function_name = item_fn.sig.ident.clone();
     item_fn.block.stmts.insert(
         0,
@@ -98,7 +127,7 @@ fn insert_identifier_call(item_fn: &mut ItemFn, function_name: &str, eq_function
             {
                 // Call the identifier function so that we can find function to
                 // harden
-                unsafe {#identifier_function_name(#eq_function_name as *const (), #hardened_function_name as *const ())}
+                unsafe {#identifier_function_name(#eq_function_name as *const (), #hardened_function_name as *const (), #drop_function_name as *const ())}
             };
         },
     );
@@ -115,10 +144,12 @@ pub fn harden_fn(attr: TokenStream, item: TokenStream) -> TokenStream {
     item_fn.attrs.push(no_inline_attr());
     let identifier_function_name = format!("{function_name_prefix}identifier");
     let eq_fn = format!("{function_name_prefix}eq");
+    let drop_fn = format!("{function_name_prefix}drop");
 
     insert_identifier_function(&mut item_fn, &identifier_function_name);
     insert_eq_function(&mut item_fn, &user_eq_name, &eq_fn);
-    insert_identifier_call(&mut item_fn, &identifier_function_name, &eq_fn);
+    insert_drop_function(&mut item_fn, &drop_fn);
+    insert_identifier_call(&mut item_fn, &identifier_function_name, &eq_fn, &drop_fn);
 
     item_fn.to_token_stream().into()
 }

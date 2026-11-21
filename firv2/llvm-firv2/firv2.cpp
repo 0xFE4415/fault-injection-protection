@@ -21,7 +21,7 @@ namespace {
 
 struct Firv2 : PassInfoMixin<Firv2> {
   void build_function(Function *function, Function *original_function,
-                      Function *cmp_function) {
+                      Function *cmp_function, Function *drop_function) {
     LLVMContext &Ctx = function->getContext();
     auto *i1_ty = Type::getInt1Ty(Ctx);
     AttributeList signature_attributes =
@@ -55,6 +55,7 @@ struct Firv2 : PassInfoMixin<Firv2> {
 
     CallInst *cmp = nullptr;
     Value *return_value;
+    Value *second_result_slot;
     if (sretType) {
       // For sret functions, we pass the original sret pointer to the first call
       // and only create a temporary alloca for the second call
@@ -76,6 +77,7 @@ struct Firv2 : PassInfoMixin<Firv2> {
       cmp = builder.CreateCall(cmp_function, {args_vec[sretPos], sretAlloca2});
       cmp->setCallingConv(cmp_function->getCallingConv());
       return_value = call1;
+      second_result_slot = sretAlloca2;
     } else {
       auto *return_type = original_function->getReturnType();
 
@@ -96,9 +98,17 @@ struct Firv2 : PassInfoMixin<Firv2> {
       cmp = builder.CreateCall(cmp_function, {return_var_1, return_var_2});
       cmp->setCallingConv(cmp_function->getCallingConv());
       return_value = call1;
+      second_result_slot = return_var_2;
     }
     cmp_function->setLinkage(GlobalValue::LinkageTypes::InternalLinkage);
     cmp_function->setComdat(nullptr);
+
+    if (drop_function) {
+      auto *drop = builder.CreateCall(drop_function, {second_result_slot});
+      drop->setCallingConv(drop_function->getCallingConv());
+      drop_function->setLinkage(GlobalValue::LinkageTypes::InternalLinkage);
+      drop_function->setComdat(nullptr);
+    }
 
     BasicBlock *return_block =
         BasicBlock::Create(function->getContext(), "return", function);
@@ -138,6 +148,15 @@ struct Firv2 : PassInfoMixin<Firv2> {
     }
     return dyn_cast<Function>(
         identifier_call->getArgOperand(1)->stripPointerCastsAndAliases());
+  }
+
+  static bool has_drop_function(CallBase *identifier_call) {
+    return identifier_call->arg_size() >= 3;
+  }
+
+  static Function *find_drop_function(CallBase *identifier_call) {
+    return dyn_cast<Function>(
+        identifier_call->getArgOperand(2)->stripPointerCastsAndAliases());
   }
 
   PreservedAnalyses run(Module &M, [[maybe_unused]] ModuleAnalysisManager &AM) {
@@ -217,6 +236,22 @@ struct Firv2 : PassInfoMixin<Firv2> {
                                  IDX + "_identifier");
         continue;
       }
+      Function *drop_func = nullptr;
+      if (has_drop_function(call)) {
+        drop_func = find_drop_function(call);
+        bool is_drop_function = drop_func && !drop_func->isDeclaration() &&
+                                !drop_func->isVarArg() &&
+                                drop_func->getReturnType()->isVoidTy() &&
+                                drop_func->arg_size() == 1 &&
+                                drop_func->getArg(0)->getType()->isPointerTy();
+        if (!is_drop_function) {
+          M.getContext().emitError(
+              "drop function must be a defined void (ptr) function for: "
+              "internal_firv2_" +
+              IDX + "_identifier");
+          continue;
+        }
+      }
 
       auto new_name = (original_name + ".original");
       function->setName(new_name);
@@ -235,7 +270,7 @@ struct Firv2 : PassInfoMixin<Firv2> {
                                  user_call->getFunction() == function;
         return !is_recursive_call;
       });
-      build_function(new_function, function, cmp_func);
+      build_function(new_function, function, cmp_func, drop_func);
       call->eraseFromParent();
     }
     if (hardening_requests.empty()) {
