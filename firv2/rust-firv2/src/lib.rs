@@ -2,6 +2,7 @@ use std::sync::atomic;
 
 use proc_macro::{Span, TokenStream};
 use quote::ToTokens;
+use syn::visit_mut::VisitMut;
 use syn::{Attribute, ItemFn, ReturnType};
 
 static IDX: atomic::AtomicUsize = atomic::AtomicUsize::new(0);
@@ -12,11 +13,30 @@ fn no_inline_attr() -> Attribute {
     }
 }
 
-fn dereference_type(t: &syn::Type) -> &syn::Type {
-    match t {
-        syn::Type::Reference(r) => dereference_type(&r.elem),
-        others => others,
+struct ElideLifetimes {
+    outer_lifetimes: Vec<syn::Ident>,
+}
+
+impl VisitMut for ElideLifetimes {
+    fn visit_lifetime_mut(&mut self, lifetime: &mut syn::Lifetime) {
+        if self.outer_lifetimes.contains(&lifetime.ident) {
+            *lifetime = syn::Lifetime::new("'_", lifetime.span());
+        }
     }
+}
+
+fn elide_outer_lifetimes(return_type: &syn::Type, generics: &syn::Generics) -> syn::Type {
+    let mut elide_lifetimes = ElideLifetimes {
+        outer_lifetimes: Vec::new(),
+    };
+    for lifetime_param in generics.lifetimes() {
+        elide_lifetimes
+            .outer_lifetimes
+            .push(lifetime_param.lifetime.ident.clone());
+    }
+    let mut elided_type = return_type.clone();
+    elide_lifetimes.visit_type_mut(&mut elided_type);
+    elided_type
 }
 
 fn insert_eq_function(item_fn: &mut ItemFn, user_eq_name: &str, function_name: &str) {
@@ -43,7 +63,7 @@ fn insert_eq_function(item_fn: &mut ItemFn, user_eq_name: &str, function_name: &
         );
     });
 
-    let return_type = dereference_type(return_type);
+    let return_type = elide_outer_lifetimes(return_type, &item_fn.sig.generics);
     item_fn.block.stmts.insert(
         0,
         syn::parse_quote! {
