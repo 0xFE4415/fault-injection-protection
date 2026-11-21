@@ -133,6 +133,7 @@ fn insert_identifier_call(
     );
 }
 
+/// The hardened function must be pure, because it runs twice and traps when the results differ.
 #[proc_macro_attribute]
 pub fn harden_fn(attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut item_fn = syn::parse_macro_input!(item as syn::ItemFn);
