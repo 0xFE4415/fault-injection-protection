@@ -12,12 +12,12 @@ define void @foo() {
   ret void
 }
 
-declare void @internal_firv2_0_identifier(ptr)
+declare void @internal_firv2_0_identifier(ptr, ptr)
 
 ; CHECK-LABEL: main.original
 define dso_local i32 @main() {
   ; CHECK-NOT: internal_firv2_0_identifier 
-  call void @internal_firv2_0_identifier(ptr @internal_firv2_0_eq)
+  call void @internal_firv2_0_identifier(ptr @internal_firv2_0_eq, ptr @main)
   ret i32 0
 }
 

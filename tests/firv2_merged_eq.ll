@@ -5,8 +5,8 @@
 
 target triple = "x86_64-redhat-linux-gnu"
 
-declare void @internal_firv2_0_identifier(ptr)
-declare void @internal_firv2_1_identifier(ptr)
+declare void @internal_firv2_0_identifier(ptr, ptr)
+declare void @internal_firv2_1_identifier(ptr, ptr)
 
 ; function merging leaves no function or alias named internal_firv2_1_eq
 @merged_eq = internal alias i1 (ptr, ptr), ptr @internal_firv2_0_eq
@@ -19,12 +19,12 @@ define i1 @internal_firv2_0_eq(ptr %x, ptr %y) {
 }
 
 define i32 @first() {
-  call void @internal_firv2_0_identifier(ptr @internal_firv2_0_eq)
+  call void @internal_firv2_0_identifier(ptr @internal_firv2_0_eq, ptr @first)
   ret i32 1
 }
 
 define i32 @second() {
-  call void @internal_firv2_1_identifier(ptr @merged_eq)
+  call void @internal_firv2_1_identifier(ptr @merged_eq, ptr @second)
   ret i32 2
 }
 

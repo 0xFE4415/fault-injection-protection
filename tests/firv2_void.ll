@@ -3,14 +3,14 @@
 
 target triple = "x86_64-redhat-linux-gnu"
 
-declare void @internal_firv2_0_identifier(ptr)
+declare void @internal_firv2_0_identifier(ptr, ptr)
 
 define i1 @internal_firv2_0_eq(ptr %x, ptr %y) {
   ret i1 true
 }
 
 define void @nothing() {
-  call void @internal_firv2_0_identifier(ptr @internal_firv2_0_eq)
+  call void @internal_firv2_0_identifier(ptr @internal_firv2_0_eq, ptr @nothing)
   ret void
 }
 

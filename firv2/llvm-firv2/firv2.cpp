@@ -127,6 +127,14 @@ struct Firv2 : PassInfoMixin<Firv2> {
         identifier_call->getArgOperand(0)->stripPointerCastsAndAliases());
   }
 
+  static Function *find_hardened_function(CallBase *identifier_call) {
+    if (identifier_call->arg_size() < 2) {
+      return nullptr;
+    }
+    return dyn_cast<Function>(
+        identifier_call->getArgOperand(1)->stripPointerCastsAndAliases());
+  }
+
   PreservedAnalyses run(Module &M, [[maybe_unused]] ModuleAnalysisManager &AM) {
     SmallVector<std::pair<Value *, StringRef>> hardening_requests;
 
@@ -153,7 +161,20 @@ struct Firv2 : PassInfoMixin<Firv2> {
     }
     for (auto &[hardening_request, IDX] : hardening_requests) {
       auto *call = cast<CallBase>(hardening_request);
-      auto *function = call->getCaller();
+      auto *function = find_hardened_function(call);
+      if (!function) {
+        M.getContext().emitError(
+            "hardened function not found for: internal_firv2_" + IDX +
+            "_identifier");
+        continue;
+      }
+      if (function != call->getCaller()) {
+        M.getContext().emitError("internal_firv2_" + IDX +
+                                 "_identifier is called from " +
+                                 call->getCaller()->getName() +
+                                 ", but hardens " + function->getName());
+        continue;
+      }
       auto original_name = function->getName();
       if (function->getReturnType()->isVoidTy() &&
           !function->hasStructRetAttr()) {
