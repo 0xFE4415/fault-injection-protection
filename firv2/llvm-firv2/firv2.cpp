@@ -70,12 +70,7 @@ struct Firv2 : PassInfoMixin<Firv2> {
       cmp->setCallingConv(cmp_function->getCallingConv());
       return_value = call1;
     } else {
-      SmallVector<Value *> args_vec;
-      for (auto &arg : original_function->args()) {
-        args_vec.push_back(&arg);
-      }
-
-      auto *return_type = original_function->getType();
+      auto *return_type = original_function->getReturnType();
 
       auto *return_var_1 = builder.CreateAlloca(return_type);
       auto *return_var_2 = builder.CreateAlloca(return_type);
@@ -119,20 +114,20 @@ struct Firv2 : PassInfoMixin<Firv2> {
     error_builder.CreateUnreachable();
   }
 
-  static Function *find_cmp_function(Module &M, CallBase *identifier_call,
-                                     StringRef IDX) {
-    if (identifier_call->arg_size() > 0) {
-      return dyn_cast<Function>(
-          identifier_call->getArgOperand(0)->stripPointerCastsAndAliases());
+  static Function *find_cmp_function(CallBase *identifier_call) {
+    if (identifier_call->arg_size() == 0) {
+      return nullptr;
     }
-    auto cmp_name = ("internal_firv2_" + IDX + "_eq").str();
-    if (auto *cmp_func = M.getFunction(cmp_name)) {
-      return cmp_func;
+    return dyn_cast<Function>(
+        identifier_call->getArgOperand(0)->stripPointerCastsAndAliases());
+  }
+
+  static Function *find_hardened_function(CallBase *identifier_call) {
+    if (identifier_call->arg_size() < 2) {
+      return nullptr;
     }
-    if (auto *alias = M.getNamedAlias(cmp_name)) {
-      return dyn_cast<Function>(alias->getAliaseeObject());
-    }
-    return nullptr;
+    return dyn_cast<Function>(
+        identifier_call->getArgOperand(1)->stripPointerCastsAndAliases());
   }
 
   PreservedAnalyses run(Module &M, [[maybe_unused]] ModuleAnalysisManager &AM) {
@@ -161,24 +156,38 @@ struct Firv2 : PassInfoMixin<Firv2> {
     }
     for (auto &[hardening_request, IDX] : hardening_requests) {
       auto *call = cast<CallBase>(hardening_request);
-      auto *function = call->getCaller();
+      auto *function = find_hardened_function(call);
+      if (!function) {
+        M.getContext().emitError(
+            "hardened function not found for: internal_firv2_" + IDX +
+            "_identifier");
+        continue;
+      }
+      if (function != call->getCaller()) {
+        M.getContext().emitError("internal_firv2_" + IDX +
+                                 "_identifier is called from " +
+                                 call->getCaller()->getName() +
+                                 ", but hardens " + function->getName());
+        continue;
+      }
       auto original_name = function->getName();
-      if (function->getType()->isVoidTy()) {
+      if (function->getReturnType()->isVoidTy() &&
+          !function->hasStructRetAttr()) {
         errs() << "Skipping void function " << original_name << "\n";
         continue;
       }
+      Function *cmp_func = find_cmp_function(call);
+      if (!cmp_func) {
+        M.getContext().emitError("cmp function not found for: internal_firv2_" +
+                                 IDX + "_identifier");
+        continue;
+      }
+
       auto new_name = (original_name + ".original");
       function->setName(new_name);
       auto new_function = cast<Function>(
           M.getOrInsertFunction(original_name, function->getFunctionType())
               .getCallee());
-
-      Function *cmp_func = find_cmp_function(M, call, IDX);
-      if (!cmp_func) {
-        errs() << "cmp function not found for: internal_firv2_" << IDX
-               << "_identifier\n";
-        exit(EXIT_FAILURE);
-      }
 
       function->replaceAllUsesWith(new_function);
       build_function(new_function, function, cmp_func);

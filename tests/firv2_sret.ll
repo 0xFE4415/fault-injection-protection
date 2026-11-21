@@ -7,13 +7,13 @@ target triple = "x86_64-redhat-linux-gnu"
 
 %struct.Point = type { i32, i32 }
 
-declare void @internal_firv2_0_identifier()
+declare void @internal_firv2_0_identifier(ptr, ptr)
 
 ; Function returning a struct by pointer (sret)
 ; CHECK-LABEL: create_point.original
 define dso_local void @create_point(ptr sret(%struct.Point) %result, i32 %x, i32 %y) {
   ; CHECK-NOT: call void @internal_firv2_0_identifier
-  call void @internal_firv2_0_identifier()
+  call void @internal_firv2_0_identifier(ptr @internal_firv2_0_eq, ptr @create_point)
   ; CHECK-NEXT: getelementptr inbounds %struct.Point, ptr %result, i32 0, i32 0
   %x_ptr = getelementptr inbounds %struct.Point, ptr %result, i32 0, i32 0
   ; CHECK-NEXT: store i32 %x, ptr %x_ptr, align 4
