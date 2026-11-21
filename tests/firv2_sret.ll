@@ -63,13 +63,13 @@ define dso_local i32 @main() {
   ret i32 %sum
 }
 
-; CHECK: define void @create_point(ptr %0, i32 %1, i32 %2)
+; CHECK: define void @create_point(ptr sret(%struct.Point) %0, i32 %1, i32 %2)
 ; CHECK-LABEL: entry:
   ; CHECK-NEXT: %comparison_result = alloca i1
   ; CHECK-NEXT: store volatile i1 false, ptr %comparison_result
   ; CHECK-NEXT: %3 = alloca %struct.Point
-  ; CHECK-NEXT: call void @create_point.original(ptr %0, i32 %1, i32 %2)
-  ; CHECK-NEXT: call void @create_point.original(ptr %3, i32 %1, i32 %2)
+  ; CHECK-NEXT: call void @create_point.original(ptr sret(%struct.Point) %0, i32 %1, i32 %2)
+  ; CHECK-NEXT: call void @create_point.original(ptr sret(%struct.Point) %3, i32 %1, i32 %2)
   ; CHECK-NEXT: %4 = call i1 @internal_firv2_0_eq(ptr %0, ptr %3)
   ; CHECK-NEXT: store volatile i1 %4, ptr %comparison_result
   ; CHECK-NEXT: %5 = load volatile i1, ptr %comparison_result

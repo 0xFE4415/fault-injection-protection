@@ -24,6 +24,9 @@ struct Firv2 : PassInfoMixin<Firv2> {
                       Function *cmp_function) {
     LLVMContext &Ctx = function->getContext();
     auto *i1_ty = Type::getInt1Ty(Ctx);
+    AttributeList signature_attributes =
+        original_function->getAttributes().removeFnAttributes(Ctx);
+    function->setAttributes(signature_attributes);
     function->addFnAttr(Attribute::AlwaysInline);
     original_function->setLinkage(GlobalValue::LinkageTypes::InternalLinkage);
     original_function->setComdat(nullptr);
@@ -64,9 +67,11 @@ struct Firv2 : PassInfoMixin<Firv2> {
 
       auto *call1 = builder.CreateCall(original_function, args_vec);
       call1->setCallingConv(original_function->getCallingConv());
+      call1->setAttributes(signature_attributes);
 
       auto *call2 = builder.CreateCall(original_function, args_vec_temp);
       call2->setCallingConv(original_function->getCallingConv());
+      call2->setAttributes(signature_attributes);
 
       cmp = builder.CreateCall(cmp_function, {args_vec[sretPos], sretAlloca2});
       cmp->setCallingConv(cmp_function->getCallingConv());
@@ -79,9 +84,11 @@ struct Firv2 : PassInfoMixin<Firv2> {
 
       auto *call1 = builder.CreateCall(original_function, args_vec);
       call1->setCallingConv(original_function->getCallingConv());
+      call1->setAttributes(signature_attributes);
 
       auto *call2 = builder.CreateCall(original_function, args_vec);
       call2->setCallingConv(original_function->getCallingConv());
+      call2->setAttributes(signature_attributes);
 
       builder.CreateStore(call1, return_var_1);
       builder.CreateStore(call2, return_var_2);
