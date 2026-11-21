@@ -198,6 +198,12 @@ struct Firv2 : PassInfoMixin<Firv2> {
                                  IDX + "_identifier");
         continue;
       }
+      if (cmp_func->isDeclaration()) {
+        M.getContext().emitError("cmp function " + cmp_func->getName() +
+                                 " has no body for: internal_firv2_" + IDX +
+                                 "_identifier");
+        continue;
+      }
 
       auto new_name = (original_name + ".original");
       function->setName(new_name);
