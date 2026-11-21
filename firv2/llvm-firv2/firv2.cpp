@@ -26,6 +26,7 @@ struct Firv2 : PassInfoMixin<Firv2> {
     auto *i1_ty = Type::getInt1Ty(Ctx);
     function->addFnAttr(Attribute::AlwaysInline);
     original_function->setLinkage(GlobalValue::LinkageTypes::InternalLinkage);
+    original_function->setComdat(nullptr);
     BasicBlock *block = BasicBlock::Create(Ctx, "entry", function);
     IRBuilder<> builder(block);
     auto *comparison_result =
@@ -90,6 +91,7 @@ struct Firv2 : PassInfoMixin<Firv2> {
       return_value = call1;
     }
     cmp_function->setLinkage(GlobalValue::LinkageTypes::InternalLinkage);
+    cmp_function->setComdat(nullptr);
 
     BasicBlock *return_block =
         BasicBlock::Create(function->getContext(), "return", function);
@@ -195,6 +197,10 @@ struct Firv2 : PassInfoMixin<Firv2> {
       auto new_function = cast<Function>(
           M.getOrInsertFunction(original_name, function->getFunctionType())
               .getCallee());
+      new_function->setLinkage(function->getLinkage());
+      new_function->setVisibility(function->getVisibility());
+      new_function->setDLLStorageClass(function->getDLLStorageClass());
+      new_function->setComdat(function->getComdat());
 
       function->replaceUsesWithIf(new_function, [function](Use &use) {
         auto *user_call = dyn_cast<CallBase>(use.getUser());
