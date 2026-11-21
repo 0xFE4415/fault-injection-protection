@@ -204,6 +204,19 @@ struct Firv2 : PassInfoMixin<Firv2> {
                                  "_identifier");
         continue;
       }
+      auto *cmp_type = cmp_func->getFunctionType();
+      bool is_cmp_signature = !cmp_type->isVarArg() &&
+                              cmp_type->getReturnType()->isIntegerTy(1) &&
+                              cmp_type->getNumParams() == 2 &&
+                              cmp_type->getParamType(0)->isPointerTy() &&
+                              cmp_type->getParamType(1)->isPointerTy();
+      if (!is_cmp_signature) {
+        M.getContext().emitError("cmp function " + cmp_func->getName() +
+                                 " must have type i1 (ptr, ptr) for: "
+                                 "internal_firv2_" +
+                                 IDX + "_identifier");
+        continue;
+      }
 
       auto new_name = (original_name + ".original");
       function->setName(new_name);
