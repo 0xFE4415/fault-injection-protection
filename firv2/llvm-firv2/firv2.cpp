@@ -75,7 +75,7 @@ struct Firv2 : PassInfoMixin<Firv2> {
         args_vec.push_back(&arg);
       }
 
-      auto *return_type = original_function->getType();
+      auto *return_type = original_function->getReturnType();
 
       auto *return_var_1 = builder.CreateAlloca(return_type);
       auto *return_var_2 = builder.CreateAlloca(return_type);
