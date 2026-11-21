@@ -12,7 +12,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Value.h"
 #include "llvm/Passes/PassBuilder.h"
-#include "llvm/Passes/PassPlugin.h"
+#include "llvm/Plugins/PassPlugin.h"
 #include "llvm/Support/AtomicOrdering.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Scalar/DCE.h"
@@ -56,7 +56,7 @@ void getUsersRec(Value *const User, DenseSet<Value *> &All,
     if (auto ci = dyn_cast<CallBase>(currentUser)) {
       auto called_fn = ci->getCalledFunction();
 
-      if (called_fn->isDeclaration()) {
+      if (!called_fn || called_fn->isDeclaration()) {
         for (unsigned i = 0; i < ci->arg_size(); ++i) {
           auto arg = ci->getArgOperand(i);
           if (arg->getType()->isPointerTy() && !visited.contains(arg)) {
@@ -72,7 +72,7 @@ void getUsersRec(Value *const User, DenseSet<Value *> &All,
       toProcess.push_back(st->getPointerOperand());
     }
   }
-  errs() << "Users collected: " << All.size() << "\n";
+  // errs() << "Users collected: " << All.size() << "\n";
 }
 
 std::string makeHardenedFunctionNameSuffix(SmallVector<unsigned> &args) {
@@ -97,14 +97,14 @@ bool add_redundancy(llvm::Instruction *fault_detected_ptr, llvm::Instruction *in
 
   if (users_of_critical_values) {
     if (auto *call_inst = dyn_cast<CallBase>(instruction)) {
-      errs() << "CALL: " << *call_inst << '\n';
+      // errs() << "CALL: " << *call_inst << '\n';
       auto *called_fn = call_inst->getCalledFunction();
       if (!called_fn) {
-        errs() << "Skipping indirect call: " << *call_inst << "\n";
+        // errs() << "Skipping indirect call: " << *call_inst << "\n";
         return false;
       }
       if (called_fn->isDeclaration()) {
-        errs() << "Skipping declaration: " << called_fn->getName() << "\n";
+        // errs() << "Skipping declaration: " << called_fn->getName() << "\n";
         return false;
       }
       SmallVector<unsigned> args{};
@@ -136,16 +136,17 @@ bool add_redundancy(llvm::Instruction *fault_detected_ptr, llvm::Instruction *in
         harden_fn_args(cloned_function, cloned_functions, atomic_state,
                        static_cast<bool>(error_bb), args);
         cloned_function->setLinkage(GlobalValue::LinkageTypes::PrivateLinkage);
-        errs() << "copied function for hardening: "
-               << cloned_function->getName().str() << '\n';
+        // errs() << "copied function for hardening: "
+        //        << cloned_function->getName().str() << '\n';
       }
 
       call_inst->setCalledFunction(cloned_function);
     }
   }
-  if (auto branch_inst = dyn_cast<llvm::BranchInst>(instruction)) {
-    if (branch_inst->isConditional()) {
-      errs() << "BR: " << *instruction << "\n";
+  if (isa<llvm::UncondBrInst>(instruction) or
+      isa<llvm::CondBrInst>(instruction)) {
+    if (auto branch_inst = dyn_cast<llvm::CondBrInst>(instruction)) {
+      // errs() << "BR: " << *instruction << "\n";
       /*
 // before :
 if (cond)
@@ -256,7 +257,7 @@ else
     if (not supported)
       return false;
 
-    errs() << "INST: " << *instruction << "\n";
+    // errs() << "INST: " << *instruction << "\n";
 
     for (unsigned int i = 0; i < instruction->getNumOperands(); i++) {
       // "Undef values aren't exactly constants; if they have multiple uses,
@@ -264,8 +265,8 @@ else
 
       // this is *unacceptable* for our purposes, so we replace it with a null
       if (auto operand = dyn_cast<UndefValue>(instruction->getOperand(i))) {
-        errs() << "Replacing undef value with null: " << *operand << " in "
-               << *instruction << "\n";
+        // errs() << "Replacing undef value with null: " << *operand << " in "
+        //        << *instruction << "\n";
         instruction->setOperand(i, Constant::getNullValue(operand->getType()));
       }
     }
@@ -366,7 +367,8 @@ BasicBlock *insert_error_bb(Function &function) {
   {
     IRBuilder<> builder(error_bb);
     builder.CreateCall(
-        Intrinsic::getDeclaration(function.getParent(), Intrinsic::trap));
+        Intrinsic::getOrInsertDeclaration(function.getParent(),
+                                          Intrinsic::trap));
     builder.CreateUnreachable();
   }
   return error_bb;
@@ -555,7 +557,7 @@ bool isLTOPhase(const Module &M) {
 
   if (auto *CUs = M.getNamedMetadata("llvm.dbg.cu")) {
     compileUnitCount = CUs->getNumOperands();
-    errs() << "Found " << compileUnitCount << " compile units\n";
+    // errs() << "Found " << compileUnitCount << " compile units\n";
   }
 
   return compileUnitCount > 1 || M.getModuleFlag("PIE Level");
@@ -571,7 +573,7 @@ template <auto Fn> struct Cfip : PassInfoMixin<Cfip<Fn>> {
         only_on_fullLTO{only_on_fullLTO_} {}
 
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM) {
-    errs() << "LTO " << isLTOPhase(M) << "\n";
+    // errs() << "LTO " << isLTOPhase(M) << "\n";
     if (only_on_fullLTO) {
       // it appears that rustc only add this ModuleFlag when it's linking
       if (not isLTOPhase(M))

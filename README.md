@@ -6,9 +6,9 @@ TODO: description
 
 ### Dependencies
 
-* llvm developer package 19.*
+* llvm developer package 23.*
 * cmake >=3.20
-* rust toolchain with LLVM 19.* backend
+* rust toolchain with LLVM 23.* backend
 
 ### llvm plugin
 
