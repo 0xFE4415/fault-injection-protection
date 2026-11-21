@@ -11,6 +11,7 @@
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Plugins/PassPlugin.h"
 #include "llvm/Transforms/IPO/AlwaysInliner.h"
+#include <algorithm>
 #include <limits>
 #include <string>
 #include <utility>
@@ -59,7 +60,11 @@ struct Firv2 : PassInfoMixin<Firv2> {
     if (sretType) {
       // For sret functions, we pass the original sret pointer to the first call
       // and only create a temporary alloca for the second call
-      Value *sretAlloca2 = builder.CreateAlloca(sretType);
+      AllocaInst *sretAlloca2 = builder.CreateAlloca(sretType);
+      if (MaybeAlign sret_align = original_function->getParamAlign(sretPos)) {
+        sretAlloca2->setAlignment(
+            std::max(sretAlloca2->getAlign(), *sret_align));
+      }
 
       SmallVector<Value *> args_vec_temp(args_vec);
 
