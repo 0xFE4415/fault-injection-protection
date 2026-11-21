@@ -178,6 +178,11 @@ struct Firv2 : PassInfoMixin<Firv2> {
         call->eraseFromParent();
         continue;
       }
+      if (function->isVarArg()) {
+        errs() << "Skipping variadic function " << original_name << "\n";
+        call->eraseFromParent();
+        continue;
+      }
       Function *cmp_func = find_cmp_function(call);
       if (!cmp_func) {
         M.getContext().emitError("cmp function not found for: internal_firv2_" +
