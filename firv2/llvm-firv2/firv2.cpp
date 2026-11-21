@@ -167,18 +167,18 @@ struct Firv2 : PassInfoMixin<Firv2> {
         errs() << "Skipping void function " << original_name << "\n";
         continue;
       }
+      Function *cmp_func = find_cmp_function(M, call, IDX);
+      if (!cmp_func) {
+        M.getContext().emitError("cmp function not found for: internal_firv2_" +
+                                 IDX + "_identifier");
+        continue;
+      }
+
       auto new_name = (original_name + ".original");
       function->setName(new_name);
       auto new_function = cast<Function>(
           M.getOrInsertFunction(original_name, function->getFunctionType())
               .getCallee());
-
-      Function *cmp_func = find_cmp_function(M, call, IDX);
-      if (!cmp_func) {
-        errs() << "cmp function not found for: internal_firv2_" << IDX
-               << "_identifier\n";
-        exit(EXIT_FAILURE);
-      }
 
       function->replaceAllUsesWith(new_function);
       build_function(new_function, function, cmp_func);
