@@ -175,6 +175,7 @@ struct Firv2 : PassInfoMixin<Firv2> {
       if (function->getReturnType()->isVoidTy() &&
           !function->hasStructRetAttr()) {
         errs() << "Skipping void function " << original_name << "\n";
+        call->eraseFromParent();
         continue;
       }
       Function *cmp_func = find_cmp_function(call);
