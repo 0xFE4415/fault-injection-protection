@@ -70,11 +70,6 @@ struct Firv2 : PassInfoMixin<Firv2> {
       cmp->setCallingConv(cmp_function->getCallingConv());
       return_value = call1;
     } else {
-      SmallVector<Value *> args_vec;
-      for (auto &arg : original_function->args()) {
-        args_vec.push_back(&arg);
-      }
-
       auto *return_type = original_function->getReturnType();
 
       auto *return_var_1 = builder.CreateAlloca(return_type);
