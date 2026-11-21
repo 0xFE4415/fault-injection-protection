@@ -12,6 +12,7 @@
 #include "llvm/Plugins/PassPlugin.h"
 #include "llvm/Transforms/IPO/AlwaysInliner.h"
 #include <limits>
+#include <string>
 #include <utility>
 
 using namespace llvm;
@@ -170,7 +171,7 @@ struct Firv2 : PassInfoMixin<Firv2> {
                                  ", but hardens " + function->getName());
         continue;
       }
-      auto original_name = function->getName();
+      std::string original_name = function->getName().str();
       if (function->getReturnType()->isVoidTy() &&
           !function->hasStructRetAttr()) {
         errs() << "Skipping void function " << original_name << "\n";
