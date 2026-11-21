@@ -163,7 +163,8 @@ struct Firv2 : PassInfoMixin<Firv2> {
       auto *call = cast<CallBase>(hardening_request);
       auto *function = call->getCaller();
       auto original_name = function->getName();
-      if (function->getType()->isVoidTy()) {
+      if (function->getReturnType()->isVoidTy() &&
+          !function->hasStructRetAttr()) {
         errs() << "Skipping void function " << original_name << "\n";
         continue;
       }
