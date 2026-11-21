@@ -133,9 +133,8 @@ struct Firv2 : PassInfoMixin<Firv2> {
     }
 
     IRBuilder<> error_builder(error_block);
-    error_builder.CreateCall(
-        Intrinsic::getOrInsertDeclaration(function->getParent(),
-                                          Intrinsic::trap));
+    error_builder.CreateCall(Intrinsic::getOrInsertDeclaration(
+        function->getParent(), Intrinsic::trap));
     error_builder.CreateUnreachable();
   }
 
