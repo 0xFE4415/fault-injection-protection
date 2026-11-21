@@ -9,8 +9,8 @@ find_package(LLVM REQUIRED CONFIG)
 message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
 message(STATUS "Using LLVMConfig.cmake in: ${LLVM_DIR}")
 
-if(NOT "${LLVM_VERSION_MAJOR}" MATCHES "^19.*")
-  message(FATAL_ERROR "Found LLVM ${LLVM_VERSION_MAJOR}, but LLVM 19 is required")
+if(NOT "${LLVM_VERSION_MAJOR}" MATCHES "^23.*")
+  message(FATAL_ERROR "Found LLVM ${LLVM_VERSION_MAJOR}, but LLVM 23 is required")
 endif()
 
 separate_arguments(LLVM_DEFINITIONS_LIST NATIVE_COMMAND ${LLVM_DEFINITIONS})

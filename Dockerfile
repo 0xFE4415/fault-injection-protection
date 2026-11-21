@@ -1,4 +1,4 @@
-FROM fedora:41
+FROM fedora:45
 
 RUN dnf install -y \
     clang \
@@ -17,7 +17,7 @@ RUN dnf install -y \
 
 WORKDIR /work
 
-RUN curl https://sh.rustup.rs -sSf | sh -s -- --default-toolchain=1.84.1 -y
+RUN curl https://sh.rustup.rs -sSf | sh -s -- --default-toolchain=1.100.0 -y
 
 ADD ./ ./
 

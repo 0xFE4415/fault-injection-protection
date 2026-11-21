@@ -9,7 +9,7 @@
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Value.h"
 #include "llvm/Passes/PassBuilder.h"
-#include "llvm/Passes/PassPlugin.h"
+#include "llvm/Plugins/PassPlugin.h"
 #include "llvm/Transforms/IPO/AlwaysInliner.h"
 #include <limits>
 #include <utility>
@@ -114,8 +114,25 @@ struct Firv2 : PassInfoMixin<Firv2> {
 
     IRBuilder<> error_builder(error_block);
     error_builder.CreateCall(
-        Intrinsic::getDeclaration(function->getParent(), Intrinsic::trap));
+        Intrinsic::getOrInsertDeclaration(function->getParent(),
+                                          Intrinsic::trap));
     error_builder.CreateUnreachable();
+  }
+
+  static Function *find_cmp_function(Module &M, CallBase *identifier_call,
+                                     StringRef IDX) {
+    if (identifier_call->arg_size() > 0) {
+      return dyn_cast<Function>(
+          identifier_call->getArgOperand(0)->stripPointerCastsAndAliases());
+    }
+    auto cmp_name = ("internal_firv2_" + IDX + "_eq").str();
+    if (auto *cmp_func = M.getFunction(cmp_name)) {
+      return cmp_func;
+    }
+    if (auto *alias = M.getNamedAlias(cmp_name)) {
+      return dyn_cast<Function>(alias->getAliaseeObject());
+    }
+    return nullptr;
   }
 
   PreservedAnalyses run(Module &M, [[maybe_unused]] ModuleAnalysisManager &AM) {
@@ -156,13 +173,10 @@ struct Firv2 : PassInfoMixin<Firv2> {
           M.getOrInsertFunction(original_name, function->getFunctionType())
               .getCallee());
 
-      auto cmp_name = ("internal_firv2_" + IDX + "_eq").str();
-      Function *cmp_func;
-      if ((cmp_func = M.getFunction(cmp_name))) {
-      } else if (GlobalAlias *alias = M.getNamedAlias(cmp_name)) {
-        cmp_func = dyn_cast<Function>(alias->getAliaseeObject());
-      } else {
-        errs() << "cmp function not found: " << cmp_name << "\n";
+      Function *cmp_func = find_cmp_function(M, call, IDX);
+      if (!cmp_func) {
+        errs() << "cmp function not found for: internal_firv2_" << IDX
+               << "_identifier\n";
         exit(EXIT_FAILURE);
       }
 
