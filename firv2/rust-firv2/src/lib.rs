@@ -49,7 +49,6 @@ fn insert_eq_function(item_fn: &mut ItemFn, user_eq_name: &str, function_name: &
         syn::parse_quote! {
                 // eq function
                 #[inline(never)]
-                #[unsafe(no_mangle)]
                 pub fn #eq_function_name(x : & #return_type , y: & #return_type) -> bool {
                     return #user_eq_name(&x, &y);
                 }
