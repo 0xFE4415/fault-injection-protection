@@ -119,20 +119,12 @@ struct Firv2 : PassInfoMixin<Firv2> {
     error_builder.CreateUnreachable();
   }
 
-  static Function *find_cmp_function(Module &M, CallBase *identifier_call,
-                                     StringRef IDX) {
-    if (identifier_call->arg_size() > 0) {
-      return dyn_cast<Function>(
-          identifier_call->getArgOperand(0)->stripPointerCastsAndAliases());
+  static Function *find_cmp_function(CallBase *identifier_call) {
+    if (identifier_call->arg_size() == 0) {
+      return nullptr;
     }
-    auto cmp_name = ("internal_firv2_" + IDX + "_eq").str();
-    if (auto *cmp_func = M.getFunction(cmp_name)) {
-      return cmp_func;
-    }
-    if (auto *alias = M.getNamedAlias(cmp_name)) {
-      return dyn_cast<Function>(alias->getAliaseeObject());
-    }
-    return nullptr;
+    return dyn_cast<Function>(
+        identifier_call->getArgOperand(0)->stripPointerCastsAndAliases());
   }
 
   PreservedAnalyses run(Module &M, [[maybe_unused]] ModuleAnalysisManager &AM) {
@@ -168,7 +160,7 @@ struct Firv2 : PassInfoMixin<Firv2> {
         errs() << "Skipping void function " << original_name << "\n";
         continue;
       }
-      Function *cmp_func = find_cmp_function(M, call, IDX);
+      Function *cmp_func = find_cmp_function(call);
       if (!cmp_func) {
         M.getContext().emitError("cmp function not found for: internal_firv2_" +
                                  IDX + "_identifier");
