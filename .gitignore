@@ -1,4 +1,5 @@
 target/
 /build
 /tests/Output
+/tests/.lit_test_times.txt
 Cargo.lock
