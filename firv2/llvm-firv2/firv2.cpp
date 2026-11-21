@@ -196,7 +196,12 @@ struct Firv2 : PassInfoMixin<Firv2> {
           M.getOrInsertFunction(original_name, function->getFunctionType())
               .getCallee());
 
-      function->replaceAllUsesWith(new_function);
+      function->replaceUsesWithIf(new_function, [function](Use &use) {
+        auto *user_call = dyn_cast<CallBase>(use.getUser());
+        bool is_recursive_call = user_call && user_call->isCallee(&use) &&
+                                 user_call->getFunction() == function;
+        return !is_recursive_call;
+      });
       build_function(new_function, function, cmp_func);
       call->eraseFromParent();
     }
