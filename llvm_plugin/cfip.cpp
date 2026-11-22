@@ -41,6 +41,11 @@ void getUsersRec(Value *const User, const Function &Owner,
       continue;
     }
 
+    // constant data such as a null pointer is shared by every function and
+    // has no users to follow
+    if (!currentUser->hasUseList())
+      continue;
+
     if (auto inst = dyn_cast<Instruction>(currentUser)) {
       // a tainted global is used by other functions too, they are not hardened
       // with the state of this function
