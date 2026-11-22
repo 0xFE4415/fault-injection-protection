@@ -28,6 +28,28 @@ impl HardenVariable {
             Err(not_hardened)
         }
     }
+    fn harden_local(&mut self, stmt: &mut syn::Local) {
+        let syn::Pat::Type(syn::PatType { pat, ty, .. }) = &stmt.pat else {
+            return;
+        };
+        let syn::Pat::Ident(pattern) = &**pat else {
+            return;
+        };
+        let harden_var_name = &pattern.ident;
+        if !self.requested.contains(&harden_var_name.to_string()) {
+            return;
+        }
+        println!("Harden variable: {}", harden_var_name);
+        self.hardened.insert(harden_var_name.to_string());
+        let Some(original_init) = &mut stmt.init else {
+            panic!(
+                "Failed to harden variable: {:?}, because it was not initialized.",
+                harden_var_name
+            );
+        };
+
+        harden_init(original_init, ty);
+    }
 }
 
 fn harden_init(stmt_init: &mut syn::LocalInit, ty: &Box<syn::Type>) {
@@ -63,30 +85,8 @@ fn harden_init(stmt_init: &mut syn::LocalInit, ty: &Box<syn::Type>) {
 }
 impl VisitMut for HardenVariable {
     fn visit_local_mut(&mut self, stmt: &mut syn::Local) {
-        let (pat, ty) = match &stmt.pat {
-            syn::Pat::Type(syn::PatType { pat, ty, .. }) => (pat, ty),
-            _ => return,
-        };
-        let syn::Pat::Ident(ref pattern) = &**pat else {
-            return;
-        };
-        let harden_var_name = if self.requested.contains(&pattern.ident.to_string()) {
-            println!("Harden variable: {}", pattern.ident);
-            self.hardened.insert(pattern.ident.to_string());
-            &pattern.ident
-        } else {
-            return;
-        };
-        let Some(ref mut original_init) = stmt.init else {
-            panic!(
-                "Failed to harden variable: {:?}, because it was not initialized.",
-                harden_var_name
-            );
-        };
-
-        harden_init(original_init, ty);
-
         visit_mut::visit_local_mut(self, stmt);
+        self.harden_local(stmt);
     }
 }
 
