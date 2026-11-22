@@ -11,7 +11,9 @@
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Plugins/PassPlugin.h"
 #include "llvm/Transforms/IPO/AlwaysInliner.h"
+#include <algorithm>
 #include <limits>
+#include <string>
 #include <utility>
 
 using namespace llvm;
@@ -20,11 +22,15 @@ namespace {
 
 struct Firv2 : PassInfoMixin<Firv2> {
   void build_function(Function *function, Function *original_function,
-                      Function *cmp_function) {
+                      Function *cmp_function, Function *drop_function) {
     LLVMContext &Ctx = function->getContext();
     auto *i1_ty = Type::getInt1Ty(Ctx);
+    AttributeList signature_attributes =
+        original_function->getAttributes().removeFnAttributes(Ctx);
+    function->setAttributes(signature_attributes);
     function->addFnAttr(Attribute::AlwaysInline);
     original_function->setLinkage(GlobalValue::LinkageTypes::InternalLinkage);
+    original_function->setComdat(nullptr);
     BasicBlock *block = BasicBlock::Create(Ctx, "entry", function);
     IRBuilder<> builder(block);
     auto *comparison_result =
@@ -50,10 +56,15 @@ struct Firv2 : PassInfoMixin<Firv2> {
 
     CallInst *cmp = nullptr;
     Value *return_value;
+    Value *second_result_slot;
     if (sretType) {
       // For sret functions, we pass the original sret pointer to the first call
       // and only create a temporary alloca for the second call
-      Value *sretAlloca2 = builder.CreateAlloca(sretType);
+      AllocaInst *sretAlloca2 = builder.CreateAlloca(sretType);
+      if (MaybeAlign sret_align = original_function->getParamAlign(sretPos)) {
+        sretAlloca2->setAlignment(
+            std::max(sretAlloca2->getAlign(), *sret_align));
+      }
 
       SmallVector<Value *> args_vec_temp(args_vec);
 
@@ -62,13 +73,16 @@ struct Firv2 : PassInfoMixin<Firv2> {
 
       auto *call1 = builder.CreateCall(original_function, args_vec);
       call1->setCallingConv(original_function->getCallingConv());
+      call1->setAttributes(signature_attributes);
 
       auto *call2 = builder.CreateCall(original_function, args_vec_temp);
       call2->setCallingConv(original_function->getCallingConv());
+      call2->setAttributes(signature_attributes);
 
       cmp = builder.CreateCall(cmp_function, {args_vec[sretPos], sretAlloca2});
       cmp->setCallingConv(cmp_function->getCallingConv());
       return_value = call1;
+      second_result_slot = sretAlloca2;
     } else {
       auto *return_type = original_function->getReturnType();
 
@@ -77,9 +91,11 @@ struct Firv2 : PassInfoMixin<Firv2> {
 
       auto *call1 = builder.CreateCall(original_function, args_vec);
       call1->setCallingConv(original_function->getCallingConv());
+      call1->setAttributes(signature_attributes);
 
       auto *call2 = builder.CreateCall(original_function, args_vec);
       call2->setCallingConv(original_function->getCallingConv());
+      call2->setAttributes(signature_attributes);
 
       builder.CreateStore(call1, return_var_1);
       builder.CreateStore(call2, return_var_2);
@@ -87,8 +103,17 @@ struct Firv2 : PassInfoMixin<Firv2> {
       cmp = builder.CreateCall(cmp_function, {return_var_1, return_var_2});
       cmp->setCallingConv(cmp_function->getCallingConv());
       return_value = call1;
+      second_result_slot = return_var_2;
     }
     cmp_function->setLinkage(GlobalValue::LinkageTypes::InternalLinkage);
+    cmp_function->setComdat(nullptr);
+
+    if (drop_function) {
+      auto *drop = builder.CreateCall(drop_function, {second_result_slot});
+      drop->setCallingConv(drop_function->getCallingConv());
+      drop_function->setLinkage(GlobalValue::LinkageTypes::InternalLinkage);
+      drop_function->setComdat(nullptr);
+    }
 
     BasicBlock *return_block =
         BasicBlock::Create(function->getContext(), "return", function);
@@ -108,9 +133,8 @@ struct Firv2 : PassInfoMixin<Firv2> {
     }
 
     IRBuilder<> error_builder(error_block);
-    error_builder.CreateCall(
-        Intrinsic::getOrInsertDeclaration(function->getParent(),
-                                          Intrinsic::trap));
+    error_builder.CreateCall(Intrinsic::getOrInsertDeclaration(
+        function->getParent(), Intrinsic::trap));
     error_builder.CreateUnreachable();
   }
 
@@ -128,6 +152,15 @@ struct Firv2 : PassInfoMixin<Firv2> {
     }
     return dyn_cast<Function>(
         identifier_call->getArgOperand(1)->stripPointerCastsAndAliases());
+  }
+
+  static bool has_drop_function(CallBase *identifier_call) {
+    return identifier_call->arg_size() >= 3;
+  }
+
+  static Function *find_drop_function(CallBase *identifier_call) {
+    return dyn_cast<Function>(
+        identifier_call->getArgOperand(2)->stripPointerCastsAndAliases());
   }
 
   PreservedAnalyses run(Module &M, [[maybe_unused]] ModuleAnalysisManager &AM) {
@@ -170,10 +203,25 @@ struct Firv2 : PassInfoMixin<Firv2> {
                                  ", but hardens " + function->getName());
         continue;
       }
-      auto original_name = function->getName();
+      std::string original_name = function->getName().str();
       if (function->getReturnType()->isVoidTy() &&
           !function->hasStructRetAttr()) {
         errs() << "Skipping void function " << original_name << "\n";
+        call->eraseFromParent();
+        continue;
+      }
+      if (function->isVarArg()) {
+        errs() << "Skipping variadic function " << original_name << "\n";
+        call->eraseFromParent();
+        continue;
+      }
+      if (function->getAttributes().hasAttrSomewhere(Attribute::InAlloca) ||
+          function->getAttributes().hasAttrSomewhere(Attribute::Preallocated)) {
+        M.getContext().emitError(
+            original_name +
+            " has an inalloca or preallocated argument, which cannot be "
+            "passed to two calls, for: internal_firv2_" +
+            IDX + "_identifier");
         continue;
       }
       Function *cmp_func = find_cmp_function(call);
@@ -182,15 +230,60 @@ struct Firv2 : PassInfoMixin<Firv2> {
                                  IDX + "_identifier");
         continue;
       }
+      if (cmp_func->isDeclaration()) {
+        M.getContext().emitError("cmp function " + cmp_func->getName() +
+                                 " has no body for: internal_firv2_" + IDX +
+                                 "_identifier");
+        continue;
+      }
+      auto *cmp_type = cmp_func->getFunctionType();
+      bool is_cmp_signature = !cmp_type->isVarArg() &&
+                              cmp_type->getReturnType()->isIntegerTy(1) &&
+                              cmp_type->getNumParams() == 2 &&
+                              cmp_type->getParamType(0)->isPointerTy() &&
+                              cmp_type->getParamType(1)->isPointerTy();
+      if (!is_cmp_signature) {
+        M.getContext().emitError("cmp function " + cmp_func->getName() +
+                                 " must have type i1 (ptr, ptr) for: "
+                                 "internal_firv2_" +
+                                 IDX + "_identifier");
+        continue;
+      }
+      Function *drop_func = nullptr;
+      if (has_drop_function(call)) {
+        drop_func = find_drop_function(call);
+        bool is_drop_function = drop_func && !drop_func->isDeclaration() &&
+                                !drop_func->isVarArg() &&
+                                drop_func->getReturnType()->isVoidTy() &&
+                                drop_func->arg_size() == 1 &&
+                                drop_func->getArg(0)->getType()->isPointerTy();
+        if (!is_drop_function) {
+          M.getContext().emitError(
+              "drop function must be a defined void (ptr) function for: "
+              "internal_firv2_" +
+              IDX + "_identifier");
+          continue;
+        }
+      }
 
       auto new_name = (original_name + ".original");
       function->setName(new_name);
       auto new_function = cast<Function>(
           M.getOrInsertFunction(original_name, function->getFunctionType())
               .getCallee());
+      new_function->setLinkage(function->getLinkage());
+      new_function->setVisibility(function->getVisibility());
+      new_function->setDLLStorageClass(function->getDLLStorageClass());
+      new_function->setComdat(function->getComdat());
+      new_function->setCallingConv(function->getCallingConv());
 
-      function->replaceAllUsesWith(new_function);
-      build_function(new_function, function, cmp_func);
+      function->replaceUsesWithIf(new_function, [function](Use &use) {
+        auto *user_call = dyn_cast<CallBase>(use.getUser());
+        bool is_recursive_call = user_call && user_call->isCallee(&use) &&
+                                 user_call->getFunction() == function;
+        return !is_recursive_call;
+      });
+      build_function(new_function, function, cmp_func, drop_func);
       call->eraseFromParent();
     }
     if (hardening_requests.empty()) {
