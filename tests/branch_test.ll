@@ -6,13 +6,12 @@
 
 ; CHECK-LABEL: main
 define i32 @main(i1 %0) {
-  ; CHECK: %unexpected_result = sub i1 false, %0
-  ; CHECK-NEXT: br i1 %0
+  ; CHECK: br i1 %0
   br i1 %0, label %true, label %false
 
 ; CHECK-LABEL: false:
 false:
-  ; CHECK-NEXT: %false_branch_fault = icmp ne i1 %unexpected_result, false
+  ; CHECK-NEXT: %false_branch_fault = icmp ne i1 %0, false
   ; CHECK: %3 = or i8 0, %2
   ; CHECK: br i1 %4, label %error_handling, label %ret_block
 
@@ -22,7 +21,7 @@ false:
 
 ; CHECK-LABEL: true:
 true:
-  ; CHECK-NEXT: %true_branch_fault = icmp ne i1 %unexpected_result, true
+  ; CHECK-NEXT: %true_branch_fault = icmp ne i1 %0, true
   ; CHECK: %6 = or i8 0, %5
   ; CHECK: br i1 %7, label %error_handling, label %ret_block1
 
