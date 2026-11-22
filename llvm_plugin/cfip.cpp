@@ -1,3 +1,4 @@
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/Attributes.h"
@@ -17,6 +18,7 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Scalar/DCE.h"
 #include "llvm/Transforms/Scalar/SROA.h"
+#include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 
 using namespace llvm;
@@ -24,8 +26,8 @@ using namespace llvm;
 
 namespace {
 
-void getUsersRec(Value *const User, DenseSet<Value *> &All,
-                 DenseSet<Instruction *> &Insts) {
+void getUsersRec(Value *const User, const Function &Owner,
+                 DenseSet<Value *> &All, DenseSet<Instruction *> &Insts) {
   std::vector<Value *> toProcess;
   DenseSet<Value *> visited;
   toProcess.push_back(User);
@@ -40,6 +42,10 @@ void getUsersRec(Value *const User, DenseSet<Value *> &All,
     }
 
     if (auto inst = dyn_cast<Instruction>(currentUser)) {
+      // a tainted global is used by other functions too, they are not hardened
+      // with the state of this function
+      if (inst->getFunction() != &Owner)
+        continue;
       Insts.insert(inst);
     }
 
@@ -87,8 +93,55 @@ size_t harden_fn_args(Function *function,
                       DenseSet<Function *> *cloned_functions, bool atomic_state,
                       bool check_asap, SmallVector<unsigned> &args);
 
+BasicBlock *edge_block_for_check(CondBrInst *branch_inst, unsigned index) {
+  auto *successor = branch_inst->getSuccessor(index);
+  if (!successor->hasNPredecessorsOrMore(2))
+    return successor;
+
+  auto *edge_block = SplitCriticalEdge(branch_inst, index);
+  assert(edge_block && "a shared successor of a conditional branch is always "
+                       "on a critical edge");
+  return edge_block;
+}
+
+Value *reload_through_volatile_slot(
+    Value *value, Instruction *insert_before,
+    DenseMap<Type *, AllocaInst *> &barrier_slots) {
+  const bool is_volatile = true;
+  auto *type = value->getType();
+  auto *&slot = barrier_slots[type];
+  if (!slot) {
+    IRBuilder<> alloca_builder(
+        &insert_before->getFunction()->getEntryBlock().front());
+    slot = alloca_builder.CreateAlloca(type, nullptr, "barrier_slot");
+  }
+  IRBuilder<> builder(insert_before);
+  builder.CreateStore(value, slot, is_volatile);
+  return builder.CreateLoad(type, slot, is_volatile, "barrier");
+}
+
+void reload_incoming_values_through_volatile_slot(
+    PHINode *phi, DenseMap<Type *, AllocaInst *> &barrier_slots) {
+  DenseMap<BasicBlock *, Value *> reloaded_per_block;
+  for (unsigned index = 0; index < phi->getNumIncomingValues(); ++index) {
+    auto *incoming_block = phi->getIncomingBlock(index);
+    auto *incoming_value = phi->getIncomingValue(index);
+    auto *terminator = incoming_block->getTerminator();
+    if (terminator->isEHPad() || incoming_value == terminator)
+      continue;
+
+    auto [entry, inserted] =
+        reloaded_per_block.try_emplace(incoming_block, nullptr);
+    if (inserted)
+      entry->second = reload_through_volatile_slot(incoming_value, terminator,
+                                                   barrier_slots);
+    phi->setIncomingValue(index, entry->second);
+  }
+}
+
 bool add_redundancy(llvm::Instruction *fault_detected_ptr, llvm::Instruction *instruction,
                     bool atomic_state, llvm::BasicBlock *error_bb,
+                    DenseMap<Type *, AllocaInst *> &barrier_slots,
                     DenseSet<Value *> *users_of_critical_values = nullptr,
                     DenseSet<Function *> *cloned_functions = nullptr) {
   // the cloned_functions must be present if users_of_critical_values is
@@ -172,22 +225,9 @@ else
 */
       auto *function = branch_inst->getFunction();
       auto *cond = branch_inst->getCondition();
-      auto replace_successors_if_needed =
-          [function, branch_inst](unsigned int i, StringRef name) {
-            ValueToValueMapTy VMap;
-            auto *bb = branch_inst->getSuccessor(i);
-            if (bb->hasNPredecessorsOrMore(2)) {
-              auto *cloned_bb = CloneBasicBlock(bb, VMap, name, function);
-              remapInstructionsInBlocks({cloned_bb}, VMap);
-              branch_inst->setSuccessor(i, cloned_bb);
-              return cloned_bb;
-            } else {
-              return bb;
-            }
-          };
 
-      auto *true_bb = replace_successors_if_needed(0, ".clone");
-      auto *false_bb = replace_successors_if_needed(1, ".clone");
+      auto *true_bb = edge_block_for_check(branch_inst, 0);
+      auto *false_bb = edge_block_for_check(branch_inst, 1);
       // Create a variable to track the chosen branch
       IRBuilder<> builder(&function->getEntryBlock().front());
       auto *chosen_branch =
@@ -257,6 +297,11 @@ else
     if (not supported)
       return false;
 
+    auto *block = instruction->getParent();
+    if (isa<PHINode>(instruction) &&
+        block->getFirstInsertionPt() == block->end())
+      return false;
+
     // errs() << "INST: " << *instruction << "\n";
 
     for (unsigned int i = 0; i < instruction->getNumOperands(); i++) {
@@ -279,13 +324,25 @@ else
     tmp2->setName("tmp2");
     builder.Insert(tmp2);
 
+    if (auto *tmp2_phi = dyn_cast<PHINode>(tmp2))
+      reload_incoming_values_through_volatile_slot(tmp2_phi, barrier_slots);
+    else
+      tmp2->setOperand(0, reload_through_volatile_slot(tmp2->getOperand(0),
+                                                       tmp2, barrier_slots));
+
+    if (isa<PHINode>(instruction))
+      builder.SetInsertPoint(block, block->getFirstInsertionPt());
+
+    auto *second_result = reload_through_volatile_slot(
+        tmp2, &*builder.GetInsertPoint(), barrier_slots);
+
     // tmp1 != tmp2
     if (is_supported_by_cmp) {
       local_fault_detected =
-          builder.CreateICmpNE(tmp1, tmp2, "is_fault_detected");
+          builder.CreateICmpNE(tmp1, second_result, "is_fault_detected");
     } else if (is_supported_by_fcmp) {
       local_fault_detected =
-          builder.CreateFCmpONE(tmp1, tmp2, "is_fault_detected");
+          builder.CreateFCmpONE(tmp1, second_result, "is_fault_detected");
     } else {
       assert(0 && "unsupported op");
     }
@@ -452,6 +509,17 @@ llvm::Instruction *insert_bool(IRBuilder<> &alloca_builder, LLVMContext &Ctx) {
   return fault_detected_ptr;
 }
 
+SmallVector<Instruction *>
+in_function_order(Function &function, const DenseSet<Instruction *> &insts) {
+  SmallVector<Instruction *> ordered;
+  for (auto &instruction : instructions(function)) {
+    if (insts.contains(&instruction))
+      ordered.push_back(&instruction);
+  }
+  assert(ordered.size() == insts.size());
+  return ordered;
+}
+
 size_t harden_fn_args(Function *function,
                       DenseSet<Function *> *cloned_functions, bool atomic_state,
                       bool check_asap, SmallVector<unsigned> &args) {
@@ -466,7 +534,8 @@ size_t harden_fn_args(Function *function,
   DenseSet<Value *> users_of_critical_values;
   DenseSet<Instruction *> insts;
   for (const auto &arg : args) {
-    getUsersRec(function->getArg(arg), users_of_critical_values, insts);
+    getUsersRec(function->getArg(arg), *function, users_of_critical_values,
+                insts);
   }
   if (users_of_critical_values.empty()) {
     return 0;
@@ -474,10 +543,11 @@ size_t harden_fn_args(Function *function,
 
   auto *error_bb = insert_error_bb(*function);
 
+  DenseMap<Type *, AllocaInst *> barrier_slots;
   bool modified = false;
-  for (auto *user : insts) {
+  for (auto *user : in_function_order(*function, insts)) {
     modified |= add_redundancy(fault_detected_ptr, user, atomic_state,
-                               check_asap ? error_bb : nullptr,
+                               check_asap ? error_bb : nullptr, barrier_slots,
                                &users_of_critical_values, cloned_functions);
   }
   if (modified)
@@ -513,7 +583,7 @@ size_t harden_chosen(Function &function, DenseSet<Function *> *cloned_functions,
       continue;
     }
 
-    getUsersRec(critical_value_use, users_of_critical_values, insts);
+    getUsersRec(critical_value_use, function, users_of_critical_values, insts);
   }
 
   if (users_of_critical_values.empty()) {
@@ -522,10 +592,11 @@ size_t harden_chosen(Function &function, DenseSet<Function *> *cloned_functions,
 
   auto *error_bb = insert_error_bb(function);
 
+  DenseMap<Type *, AllocaInst *> barrier_slots;
   bool modified = false;
-  for (auto *user : insts) {
+  for (auto *user : in_function_order(function, insts)) {
     modified |= add_redundancy(fault_detected_ptr, user, atomic_state,
-                               check_asap ? error_bb : nullptr,
+                               check_asap ? error_bb : nullptr, barrier_slots,
                                &users_of_critical_values, cloned_functions);
   }
   if (modified)
@@ -627,13 +698,15 @@ size_t harden_all(Function &function,
     instructions.push_back(&*inst);
   }
 
+  DenseMap<Type *, AllocaInst *> barrier_slots;
   bool modified = false;
   for (auto *i : instructions) {
     if (i) {
       // we are hardening everything we can in each function
       // thus we do not need to recurse into function calls
       modified |= add_redundancy(fault_detected_ptr, i, atomic_state,
-                                 check_asap ? error_bb : nullptr);
+                                 check_asap ? error_bb : nullptr,
+                                 barrier_slots);
     }
   }
   if (modified)

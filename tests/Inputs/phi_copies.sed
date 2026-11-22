@@ -1,0 +1,1 @@
+/# %m$/{n;N;N;s/^[[:space:]]*movl[[:space:]]+(%[a-z0-9]+), ([^,[:space:]]+)\n[[:space:]]*movl[[:space:]]+\2, (%[a-z0-9]+)\n[[:space:]]*cmpl[[:space:]]+\3, \1$/PHI-COPIES-MERGED/p;t;s/^[[:space:]]*movl[[:space:]]+(%[a-z0-9]+), ([^,[:space:]]+)\n[[:space:]]*movl[[:space:]]+\2, (%[a-z0-9]+)\n[[:space:]]*cmpl[[:space:]]+\3, (%[a-z0-9]+)$/PHI-COPIES-SEPARATE/p}

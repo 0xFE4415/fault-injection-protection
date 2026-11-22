@@ -9,5 +9,5 @@ rustflags = [
   "-C", "link-arg=-Xlinker",
   "-C", "link-arg=--load-pass-plugin=/work/build/lib/LLVMCfip.so",
   "-C", "link-arg=-Xlinker",
-  "-C", "link-arg=--lto-newpm-passes=lto<O3>,reg2mem,cfip<only-on-fullLTO>",
+  "-C", "link-arg=--lto-newpm-passes=lto<O3>,cfip<only-on-fullLTO>",
 ]
