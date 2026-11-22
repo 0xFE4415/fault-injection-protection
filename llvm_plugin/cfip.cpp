@@ -261,6 +261,11 @@ else
     if (not supported)
       return false;
 
+    auto *block = instruction->getParent();
+    if (isa<PHINode>(instruction) &&
+        block->getFirstInsertionPt() == block->end())
+      return false;
+
     // errs() << "INST: " << *instruction << "\n";
 
     for (unsigned int i = 0; i < instruction->getNumOperands(); i++) {
@@ -282,6 +287,9 @@ else
     auto *tmp2 = instruction->clone();
     tmp2->setName("tmp2");
     builder.Insert(tmp2);
+
+    if (isa<PHINode>(instruction))
+      builder.SetInsertPoint(block, block->getFirstInsertionPt());
 
     // tmp1 != tmp2
     if (is_supported_by_cmp) {
