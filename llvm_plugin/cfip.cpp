@@ -801,7 +801,8 @@ size_t harden_all(Function &function,
   auto *fault_detected_ptr = insert_bool(alloca_builder, Ctx);
   auto *error_bb = insert_error_bb(function);
   // add redundancy to all
-  std::vector<llvm::Instruction *> instructions(inst_cnt);
+  std::vector<llvm::Instruction *> instructions;
+  instructions.reserve(inst_cnt);
   for (inst_iterator inst = inst_begin(function), end = inst_end(function);
        inst != end; ++inst) {
     instructions.push_back(&*inst);
@@ -809,14 +810,11 @@ size_t harden_all(Function &function,
 
   DenseMap<Type *, AllocaInst *> barrier_slots;
   bool modified = false;
-  for (auto *i : instructions) {
-    if (i) {
-      // we are hardening everything we can in each function
-      // thus we do not need to recurse into function calls
-      modified |= add_redundancy(fault_detected_ptr, i, atomic_state,
-                                 check_asap ? error_bb : nullptr,
-                                 barrier_slots);
-    }
+  for (auto *instruction : instructions) {
+    // we are hardening everything we can in each function
+    // thus we do not need to recurse into function calls
+    modified |= add_redundancy(fault_detected_ptr, instruction, atomic_state,
+                               check_asap ? error_bb : nullptr, barrier_slots);
   }
   if (modified)
     add_integrity_check(function, fault_detected_ptr, atomic_state, error_bb);
