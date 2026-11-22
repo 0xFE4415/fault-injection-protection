@@ -41,6 +41,11 @@ void getUsersRec(Value *const User, const Function &Owner,
       continue;
     }
 
+    // constant data such as a null pointer is shared by every function and
+    // has no users to follow
+    if (!currentUser->hasUseList())
+      continue;
+
     if (auto inst = dyn_cast<Instruction>(currentUser)) {
       // a tainted global is used by other functions too, they are not hardened
       // with the state of this function
@@ -56,18 +61,15 @@ void getUsersRec(Value *const User, const Function &Owner,
         toProcess.push_back(user);
     }
 
-    // it's impossible to tell what the function actually does with parameters
-    // when it's just a declaration, thus we assume that all pointer operands
-    // are tainted
+    // the callee may write a critical value through any pointer argument: a
+    // declaration's body is unknown, and the taint inside a defined callee
+    // does not follow derived pointers back to its parameter, thus we assume
+    // that all pointer operands are tainted
     if (auto ci = dyn_cast<CallBase>(currentUser)) {
-      auto called_fn = ci->getCalledFunction();
-
-      if (!called_fn || called_fn->isDeclaration()) {
-        for (unsigned i = 0; i < ci->arg_size(); ++i) {
-          auto arg = ci->getArgOperand(i);
-          if (arg->getType()->isPointerTy() && !visited.contains(arg)) {
-            toProcess.push_back(arg);
-          }
+      for (unsigned i = 0; i < ci->arg_size(); ++i) {
+        auto arg = ci->getArgOperand(i);
+        if (arg->getType()->isPointerTy() && !visited.contains(arg)) {
+          toProcess.push_back(arg);
         }
       }
     }
@@ -162,11 +164,17 @@ bool add_redundancy(llvm::Instruction *fault_detected_ptr, llvm::Instruction *in
       }
       SmallVector<unsigned> args{};
 
+      const unsigned param_count = called_fn->getFunctionType()->getNumParams();
       for (unsigned i = 0; i < call_inst->arg_size(); i++) {
         auto *operand = call_inst->getArgOperand(i);
-        if (users_of_critical_values->contains(operand)) {
-          args.push_back(i);
+        if (!users_of_critical_values->contains(operand))
+          continue;
+        if (i >= param_count) {
+          errs() << "WARNING: critical value passed as a variadic argument to "
+                 << called_fn->getName() << " is not hardened in the callee\n";
+          continue;
         }
+        args.push_back(i);
       }
       // the call does not use any critical values
       if (args.empty()) {
@@ -435,15 +443,17 @@ void add_integrity_check(Function &function, Instruction *fault_detected_ptr,
                          bool atomic_state, BasicBlock *error_bb) {
   auto &Ctx = function.getContext();
 
-  SmallVector<llvm::Instruction *, 1> return_instructions;
+  SmallVector<llvm::Instruction *, 1> exit_instructions;
   for (auto &basic_block : function) {
-    if (auto *ret_inst = dyn_cast<ReturnInst>(basic_block.getTerminator()))
-      return_instructions.push_back(ret_inst);
+    auto *terminator = basic_block.getTerminator();
+    if (isa<ReturnInst>(terminator) || isa<ResumeInst>(terminator))
+      exit_instructions.push_back(terminator);
   }
-  // inserting checks before return instructions
-  for (auto ret_inst : return_instructions) {
-    BasicBlock *ret_bb = ret_inst->getParent();
-    BasicBlock *new_ret_bb = ret_bb->splitBasicBlock(ret_inst, "ret_block");
+  // inserting checks before return and resume instructions
+  for (auto exit_inst : exit_instructions) {
+    BasicBlock *ret_bb = exit_inst->getParent();
+    BasicBlock *new_ret_bb = ret_bb->splitBasicBlock(
+        exit_inst, isa<ResumeInst>(exit_inst) ? "resume_block" : "ret_block");
 
     IRBuilder<> Builder(ret_bb->getTerminator());
 
@@ -469,11 +479,12 @@ llvm::Value *unwrap_call(llvm::CallInst *opaque_call,
   // it's no longer needed thus we unwrap them:
   // before: critical_var = opaque_call(start_value)
   // after: critical_var = start_value
-  auto *called_function = opaque_call->getCalledFunction();
 
   // THIS WILL CAUSE A VERY SPECTACULAR CRASH IF LLVM FOR SOME REASON DECIDES
   // THAT SRET SHALL BE USED ON THE 2nd ARGUMENT INSTEAD OF THE 1st
-  if (called_function->hasStructRetAttr()) {
+  // the call site, not the declaration: LTO can merge same-named markers of
+  // different types into one declaration
+  if (opaque_call->hasStructRetAttr()) {
     auto *sret_arg = opaque_call->getArgOperand(0);
     auto *byvalue_arg = opaque_call->getArgOperand(1);
 
