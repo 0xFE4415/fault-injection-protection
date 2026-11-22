@@ -10,26 +10,38 @@ use syn::visit_mut::{self, VisitMut};
 static IDX: atomic::AtomicUsize = atomic::AtomicUsize::new(0);
 
 struct HardenVariable {
-    requested: HashSet<String>,
+    requested: Vec<syn::Ident>,
     hardened: HashSet<String>,
+    errors: Vec<syn::Error>,
     call_site: Span,
 }
 impl HardenVariable {
-    fn new(requested: Vec<String>, call_site: Span) -> Self {
+    fn new(requested_names: Vec<syn::Ident>, call_site: Span) -> Self {
+        let mut requested: Vec<syn::Ident> = Vec::new();
+        for name in requested_names {
+            if !requested.contains(&name) {
+                requested.push(name);
+            }
+        }
         Self {
-            requested: requested.into_iter().collect(),
+            requested,
             hardened: HashSet::new(),
+            errors: Vec::new(),
             call_site,
         }
     }
-    fn check(self) -> Result<(), HashSet<String>> {
-        let not_hardened: HashSet<String> =
-            self.requested.difference(&self.hardened).cloned().collect();
-        if not_hardened.is_empty() {
-            Ok(())
-        } else {
-            Err(not_hardened)
+    fn into_errors(self) -> Vec<syn::Error> {
+        let mut errors = self.errors;
+        for name in &self.requested {
+            if self.hardened.contains(&name.to_string()) {
+                continue;
+            }
+            errors.push(syn::Error::new(
+                name.span(),
+                format!("no `let {name}: Type = value;` found for `{name}`"),
+            ));
         }
+        errors
     }
     fn harden_local(&mut self, stmt: &mut syn::Local) {
         let syn::Pat::Type(syn::PatType { pat, ty, .. }) = &stmt.pat else {
@@ -39,15 +51,16 @@ impl HardenVariable {
             return;
         };
         let harden_var_name = &pattern.ident;
-        if !self.requested.contains(&harden_var_name.to_string()) {
+        if !self.requested.contains(harden_var_name) {
             return;
         }
         self.hardened.insert(harden_var_name.to_string());
         let Some(original_init) = &mut stmt.init else {
-            panic!(
-                "Failed to harden variable: {:?}, because it was not initialized.",
-                harden_var_name
-            );
+            self.errors.push(syn::Error::new(
+                harden_var_name.span(),
+                format!("cannot harden `{harden_var_name}`: it has no initializer"),
+            ));
+            return;
         };
 
         harden_init(original_init, ty, marker_name(&self.call_site, ty));
@@ -70,7 +83,7 @@ fn marker_name(call_site: &Span, ty: &syn::Type) -> syn::Ident {
     )
 }
 
-fn harden_init(stmt_init: &mut syn::LocalInit, ty: &Box<syn::Type>, function_name: syn::Ident) {
+fn harden_init(stmt_init: &mut syn::LocalInit, ty: &syn::Type, function_name: syn::Ident) {
     let new_init = stmt_init.expr.to_token_stream();
 
     *stmt_init = syn::LocalInit {
@@ -103,15 +116,13 @@ impl VisitMut for HardenVariable {
 #[proc_macro_attribute]
 pub fn harden_vars_fn(attr: TokenStream, item: TokenStream) -> TokenStream {
     let requested_names = syn::parse_macro_input!(attr with Punctuated::<syn::Ident, syn::Token![,]>::parse_terminated);
-    let requested = requested_names
-        .iter()
-        .map(|name| name.to_string())
-        .collect();
+    let requested = requested_names.into_iter().collect();
     let mut harden = HardenVariable::new(requested, Span::call_site());
     let mut item_fn = syn::parse_macro_input!(item as syn::ItemFn);
     harden.visit_item_fn_mut(&mut item_fn);
-    harden.check().unwrap_or_else(|not_hardened| {
-        panic!("Failed harden requested variables: {:?}.", not_hardened)
-    });
-    item_fn.to_token_stream().into()
+    let mut output = item_fn.to_token_stream();
+    for error in harden.into_errors() {
+        output.extend(error.to_compile_error());
+    }
+    output.into()
 }
