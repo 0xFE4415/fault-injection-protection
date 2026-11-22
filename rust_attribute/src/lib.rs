@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::atomic;
 
 use proc_macro::{Span, TokenStream};
@@ -11,12 +12,14 @@ static IDX: atomic::AtomicUsize = atomic::AtomicUsize::new(0);
 struct HardenVariable {
     requested: HashSet<String>,
     hardened: HashSet<String>,
+    call_site: Span,
 }
 impl HardenVariable {
-    fn new(requested: Vec<String>) -> Self {
+    fn new(requested: Vec<String>, call_site: Span) -> Self {
         Self {
             requested: requested.into_iter().collect(),
             hardened: HashSet::new(),
+            call_site,
         }
     }
     fn check(self) -> Result<(), HashSet<String>> {
@@ -48,20 +51,28 @@ impl HardenVariable {
             );
         };
 
-        harden_init(original_init, ty);
+        harden_init(original_init, ty, marker_name(&self.call_site, ty));
     }
 }
 
-fn harden_init(stmt_init: &mut syn::LocalInit, ty: &Box<syn::Type>) {
-    let new_init = stmt_init.expr.to_token_stream();
-    let function_name = syn::Ident::new(
-        format!(
-            "cfip_harden_var_{}",
-            IDX.fetch_add(1, atomic::Ordering::SeqCst)
-        )
-        .as_str(),
+// LTO merges same-named declarations of all crates, so the name must differ
+// between crates and between types
+fn marker_name(call_site: &Span, ty: &syn::Type) -> syn::Ident {
+    let mut hasher = DefaultHasher::new();
+    std::env::var("CARGO_CRATE_NAME").ok().hash(&mut hasher);
+    call_site.file().hash(&mut hasher);
+    call_site.line().hash(&mut hasher);
+    call_site.column().hash(&mut hasher);
+    ty.to_token_stream().to_string().hash(&mut hasher);
+    IDX.fetch_add(1, atomic::Ordering::SeqCst).hash(&mut hasher);
+    syn::Ident::new(
+        &format!("cfip_harden_var_{:016x}", hasher.finish()),
         Span::call_site().into(),
-    );
+    )
+}
+
+fn harden_init(stmt_init: &mut syn::LocalInit, ty: &Box<syn::Type>, function_name: syn::Ident) {
+    let new_init = stmt_init.expr.to_token_stream();
 
     *stmt_init = syn::LocalInit {
         expr: Box::<syn::Expr>::new(
@@ -97,7 +108,7 @@ pub fn harden_vars_fn(attr: TokenStream, item: TokenStream) -> TokenStream {
         .iter()
         .map(|name| name.to_string())
         .collect();
-    let mut harden = HardenVariable::new(requested);
+    let mut harden = HardenVariable::new(requested, Span::call_site());
     let mut item_fn = syn::parse_macro_input!(item as syn::ItemFn);
     harden.visit_item_fn_mut(&mut item_fn);
     harden.check().unwrap_or_else(|not_hardened| {
