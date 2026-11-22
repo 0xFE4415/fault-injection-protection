@@ -443,15 +443,17 @@ void add_integrity_check(Function &function, Instruction *fault_detected_ptr,
                          bool atomic_state, BasicBlock *error_bb) {
   auto &Ctx = function.getContext();
 
-  SmallVector<llvm::Instruction *, 1> return_instructions;
+  SmallVector<llvm::Instruction *, 1> exit_instructions;
   for (auto &basic_block : function) {
-    if (auto *ret_inst = dyn_cast<ReturnInst>(basic_block.getTerminator()))
-      return_instructions.push_back(ret_inst);
+    auto *terminator = basic_block.getTerminator();
+    if (isa<ReturnInst>(terminator) || isa<ResumeInst>(terminator))
+      exit_instructions.push_back(terminator);
   }
-  // inserting checks before return instructions
-  for (auto ret_inst : return_instructions) {
-    BasicBlock *ret_bb = ret_inst->getParent();
-    BasicBlock *new_ret_bb = ret_bb->splitBasicBlock(ret_inst, "ret_block");
+  // inserting checks before return and resume instructions
+  for (auto exit_inst : exit_instructions) {
+    BasicBlock *ret_bb = exit_inst->getParent();
+    BasicBlock *new_ret_bb = ret_bb->splitBasicBlock(
+        exit_inst, isa<ResumeInst>(exit_inst) ? "resume_block" : "ret_block");
 
     IRBuilder<> Builder(ret_bb->getTerminator());
 
