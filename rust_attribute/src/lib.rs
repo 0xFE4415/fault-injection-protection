@@ -42,7 +42,6 @@ impl HardenVariable {
         if !self.requested.contains(&harden_var_name.to_string()) {
             return;
         }
-        println!("Harden variable: {}", harden_var_name);
         self.hardened.insert(harden_var_name.to_string());
         let Some(original_init) = &mut stmt.init else {
             panic!(
