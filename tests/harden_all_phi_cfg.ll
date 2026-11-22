@@ -20,12 +20,12 @@ declare i32 @printf(ptr, ...)
 
 ; The branch in loop targets loop itself, so the predecessor and the successor are the same block.
 ; CHECK-LABEL: define i32 @self_loop(
-; CHECK: br i1 %{{[0-9]+}}, label %loop.loop_crit_edge, label %exit
+; CHECK: br i1 %[[COND:[0-9]+]], label %loop.loop_crit_edge, label %exit
 ; CHECK-LABEL: {{^}}loop.loop_crit_edge:{{.*}}; preds = %loop{{$}}
-; CHECK-NEXT: icmp ne i1 %unexpected_result, true
+; CHECK-NEXT: icmp ne i1 %[[COND]], true
 ; CHECK: br label %loop
 ; CHECK-LABEL: {{^}}exit:{{.*}}; preds = %loop{{$}}
-; CHECK: icmp ne i1 %unexpected_result, false
+; CHECK: icmp ne i1 %[[COND]], false
 define i32 @self_loop(i32 %n) {
 entry:
   br label %loop
@@ -44,12 +44,12 @@ exit:
 
 ; The branch in loop targets loop itself on the false edge and exits on the true edge.
 ; CHECK-LABEL: define i32 @self_loop_exit_on_true(
-; CHECK: br i1 %{{[0-9]+}}, label %exit, label %loop.loop_crit_edge
+; CHECK: br i1 %[[COND:[0-9]+]], label %exit, label %loop.loop_crit_edge
 ; CHECK-LABEL: {{^}}loop.loop_crit_edge:{{.*}}; preds = %loop{{$}}
-; CHECK-NEXT: icmp ne i1 %unexpected_result, false
+; CHECK-NEXT: icmp ne i1 %[[COND]], false
 ; CHECK: br label %loop
 ; CHECK-LABEL: {{^}}exit:{{.*}}; preds = %loop{{$}}
-; CHECK-NEXT: icmp ne i1 %unexpected_result, true
+; CHECK-NEXT: icmp ne i1 %[[COND]], true
 define i32 @self_loop_exit_on_true(i32 %a, i32 %b) {
 entry:
   br label %loop
@@ -88,7 +88,7 @@ m:
 ; CHECK-LABEL: define i32 @phi_in_shared(
 ; CHECK: br i1 %c, label %t1, label %entry.t0_crit_edge
 ; CHECK-LABEL: {{^}}entry.t0_crit_edge:{{.*}}; preds = %entry{{$}}
-; CHECK-NEXT: icmp ne i1 %unexpected_result, false
+; CHECK-NEXT: icmp ne i1 %c, false
 ; CHECK: br label %t0
 ; CHECK-LABEL: {{^}}t0:{{.*}}; preds = %entry.t0_crit_edge, %t1{{$}}
 ; CHECK-LABEL: {{^}}join:{{.*}}; preds = %small, %big{{$}}
@@ -146,9 +146,9 @@ exit:
 ; CHECK-LABEL: define i64 @count_zero_flags(
 ; CHECK-LABEL: {{^}}header:{{.*}}; preds = %latch.header_crit_edge, %entry{{$}}
 ; CHECK-LABEL: {{^}}latch:{{.*}}; preds = %header{{$}}
-; CHECK: br i1 %{{[0-9]+}}, label %exit, label %latch.header_crit_edge
+; CHECK: br i1 %[[COND:[0-9]+]], label %exit, label %latch.header_crit_edge
 ; CHECK-LABEL: {{^}}latch.header_crit_edge:{{.*}}; preds = %latch{{$}}
-; CHECK-NEXT: icmp ne i1 %unexpected_result{{[0-9]*}}, false
+; CHECK-NEXT: icmp ne i1 %[[COND]], false
 ; CHECK: br label %header
 define i64 @count_zero_flags(ptr %flags) {
 entry:

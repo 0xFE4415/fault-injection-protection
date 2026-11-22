@@ -314,15 +314,15 @@ else
   <false case>
 }
 // after:
-chosen_case = !cond
+chosen_branch = cond
 if (cond)
 {
-  local_fault_detected = chosen_case != true
+  local_fault_detected = chosen_branch != true
   <true case>
 }
 else
 {
-  local_fault_detected = chosen_case == true
+  local_fault_detected = chosen_branch != false
   <false case>
 }
 */
@@ -337,10 +337,7 @@ else
           builder.CreateAlloca(builder.getInt1Ty(), nullptr, "chosen_branch");
 
       builder.SetInsertPoint(branch_inst);
-
-      // we set negation of cond, so that the target branch has to fix it
-      builder.CreateStore(builder.CreateNeg(cond, "unexpected_result"),
-                          chosen_branch);
+      builder.CreateStore(cond, chosen_branch);
 
       auto *i1_ty = builder.getInt1Ty();
       auto *i8_ty = builder.getInt8Ty();
