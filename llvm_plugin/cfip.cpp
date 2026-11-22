@@ -519,6 +519,17 @@ llvm::Instruction *insert_bool(IRBuilder<> &alloca_builder, LLVMContext &Ctx) {
   return fault_detected_ptr;
 }
 
+SmallVector<Instruction *>
+in_function_order(Function &function, const DenseSet<Instruction *> &insts) {
+  SmallVector<Instruction *> ordered;
+  for (auto &instruction : instructions(function)) {
+    if (insts.contains(&instruction))
+      ordered.push_back(&instruction);
+  }
+  assert(ordered.size() == insts.size());
+  return ordered;
+}
+
 size_t harden_fn_args(Function *function,
                       DenseSet<Function *> *cloned_functions, bool atomic_state,
                       bool check_asap, SmallVector<unsigned> &args) {
@@ -543,7 +554,7 @@ size_t harden_fn_args(Function *function,
   auto *error_bb = insert_error_bb(*function);
 
   bool modified = false;
-  for (auto *user : insts) {
+  for (auto *user : in_function_order(*function, insts)) {
     modified |= add_redundancy(fault_detected_ptr, user, atomic_state,
                                check_asap ? error_bb : nullptr,
                                &users_of_critical_values, cloned_functions);
@@ -591,7 +602,7 @@ size_t harden_chosen(Function &function, DenseSet<Function *> *cloned_functions,
   auto *error_bb = insert_error_bb(function);
 
   bool modified = false;
-  for (auto *user : insts) {
+  for (auto *user : in_function_order(function, insts)) {
     modified |= add_redundancy(fault_detected_ptr, user, atomic_state,
                                check_asap ? error_bb : nullptr,
                                &users_of_critical_values, cloned_functions);

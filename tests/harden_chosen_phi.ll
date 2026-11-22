@@ -1,14 +1,6 @@
 ; SSA repair after cloning a shared successor merges a critical value in a new PHI; its users stay critical.
-; The order in which instructions are hardened changes between runs, so the pass runs several times.
-; RUN: opt -passes='cfip' -load-pass-plugin=../build/lib/LLVMCfip.so %s -S | FileCheck %s
-; RUN: opt -passes='cfip' -load-pass-plugin=../build/lib/LLVMCfip.so %s -S | FileCheck %s
-; RUN: opt -passes='cfip' -load-pass-plugin=../build/lib/LLVMCfip.so %s -S | FileCheck %s
-; RUN: opt -passes='cfip' -load-pass-plugin=../build/lib/LLVMCfip.so %s -S | FileCheck %s
-; RUN: opt -passes='cfip' -load-pass-plugin=../build/lib/LLVMCfip.so %s -S | FileCheck %s
-; RUN: opt -passes='cfip' -load-pass-plugin=../build/lib/LLVMCfip.so %s -S | FileCheck %s
-; RUN: opt -passes='cfip' -load-pass-plugin=../build/lib/LLVMCfip.so %s -S | FileCheck %s
-; RUN: opt -passes='cfip' -load-pass-plugin=../build/lib/LLVMCfip.so %s -S | FileCheck %s
 ; RUN: opt -passes='cfip' -load-pass-plugin=../build/lib/LLVMCfip.so %s -S -o %t.ll
+; RUN: FileCheck %s < %t.ll
 ; RUN: clang -w %t.ll -o %t.out
 ; RUN: %t.out | FileCheck %s --check-prefix=OUT
 ; OUT: 40
