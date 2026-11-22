@@ -684,8 +684,11 @@ size_t harden_chosen(Function &function, DenseSet<Function *> *cloned_functions,
   DenseSet<Value *> users_of_critical_values;
   DenseSet<Instruction *> insts;
 
-  for (auto &opaque_call : opaque_calls) {
-    auto *critical_value_use = unwrap_call(opaque_call, alloca_builder);
+  SmallVector<Value *, 1> critical_value_uses;
+  for (auto &opaque_call : opaque_calls)
+    critical_value_uses.push_back(unwrap_call(opaque_call, alloca_builder));
+
+  for (auto *critical_value_use : critical_value_uses) {
     if (critical_value_use->use_empty()) {
       errs() << "WARNING: nothing to harden, value not used\n";
       continue;
