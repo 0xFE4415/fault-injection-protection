@@ -10,7 +10,8 @@ declare float @llvm.sqrt.f32(float %a)
 
 ; CHECK-LABEL: @add_float
 define float @add_float(float %a, float %b) {
-  ; CHECK-COUNT-2: fadd float %a, %b
+  ; CHECK: fadd float %a, %b
+  ; CHECK: fadd float %{{[^ ,]*barrier[^ ,]*}}, %b
   %result = fadd float %a, %b
   ; CHECK: fcmp one 
   ret float %result
@@ -18,7 +19,8 @@ define float @add_float(float %a, float %b) {
 
 ; CHECK-LABEL: @div_float
 define float @div_float(float %a, float %b) {
-  ; CHECK-COUNT-2: fdiv float %a, %b
+  ; CHECK: fdiv float %a, %b
+  ; CHECK: fdiv float %{{[^ ,]*barrier[^ ,]*}}, %b
   %result = fdiv float %a, %b
   ; CHECK: fcmp one 
   ret float %result
@@ -27,13 +29,16 @@ define float @div_float(float %a, float %b) {
 ; Test a more complex calculation with multiple floating-point operations
 ; CHECK-LABEL: @complex_calc
 define float @complex_calc(float %a, float %b) {
-  ; CHECK-COUNT-2: fmul float
+  ; CHECK: fmul float
+  ; CHECK: fmul float %{{[^ ,]*barrier[^ ,]*}}
   %mul = fmul float %a, %b
   
-  ; CHECK-COUNT-2: fdiv float
+  ; CHECK: fdiv float
+  ; CHECK: fdiv float %{{[^ ,]*barrier[^ ,]*}}
   %div = fdiv float %a, %b
   
-  ; CHECK-COUNT-2: fsub float
+  ; CHECK: fsub float
+  ; CHECK: fsub float %{{[^ ,]*barrier[^ ,]*}}
   %result = fsub float %mul, %div
   
   ret float %result
@@ -41,10 +46,12 @@ define float @complex_calc(float %a, float %b) {
 
 ; CHECK-LABEL: @nan_handling
 define float @nan_handling(float %a) {
-  ; CHECK-COUNT-2: fcmp uno float
+  ; CHECK: fcmp uno float
+  ; CHECK: fcmp uno float %{{[^ ,]*barrier[^ ,]*}}
   %is_nan = fcmp uno float %a, %a
   
-  ; CHECK-COUNT-2: select i1
+  ; CHECK: select i1
+  ; CHECK: select i1 %{{[^ ,]*barrier[^ ,]*}}
   %result = select i1 %is_nan, float 0x7FF8000000000000, float %a
   ; CHECK: fcmp one float
   
@@ -53,7 +60,8 @@ define float @nan_handling(float %a) {
 
 ; CHECK-LABEL: @float_comparison
 define i1 @float_comparison(float %a, float %b) {
-  ; CHECK-COUNT-2: fcmp olt
+  ; CHECK: fcmp olt
+  ; CHECK: fcmp olt float %{{[^ ,]*barrier[^ ,]*}}
   %result = fcmp olt float %a, %b
   ; CHECK: icmp ne i1
   
@@ -79,14 +87,18 @@ define i32 @main() {
   %result5 = call i1 @float_comparison(float 0x40091EB860000000, float 0x4005AE1480000000)  ; 3.14, 2.71
   
   ; Just to have some return value - sum the results
-  ; CHECK-COUNT-2: fadd float
+  ; CHECK: fadd float
+  ; CHECK: fadd float %{{[^ ,]*barrier[^ ,]*}}
   %sum1 = fadd float %result1, %result2
-  ; CHECK-COUNT-2: fadd float
+  ; CHECK: fadd float
+  ; CHECK: fadd float %{{[^ ,]*barrier[^ ,]*}}
   %sum2 = fadd float %sum1, %result3
-  ; CHECK-COUNT-2: fadd float
+  ; CHECK: fadd float
+  ; CHECK: fadd float %{{[^ ,]*barrier[^ ,]*}}
   %sum3 = fadd float %sum2, %result4
   
-  ; CHECK-COUNT-2: fadd float
+  ; CHECK: fadd float
+  ; CHECK: fadd float %{{[^ ,]*barrier[^ ,]*}}
   %final_sum = fadd float %sum3, %sum2
   
   ; Convert to int for return

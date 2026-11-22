@@ -27,7 +27,7 @@ exit:
 ; CHECK-NOT: load i32, ptr %p
 ; CHECK-LABEL: {{^}}exit:{{.*}}; preds = %t0{{$}}
 ; CHECK-NEXT: phi i32 [ %r, %t0 ]{{$}}
-; CHECK-NEXT: phi i32 [ %r, %t0 ]{{$}}
+; CHECK-NEXT: phi i32 [ %{{[^ ,]*barrier[^ ,]*}}, %t0 ]{{$}}
 define i32 @value_used_by_phi(i1 %c, ptr %p) {
 entry:
   br i1 %c, label %t1, label %t0

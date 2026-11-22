@@ -27,7 +27,8 @@ define dso_local i32 @main() local_unnamed_addr {
 
   ; the pointer passed to an unknown callee is tainted, so its users are hardened
   %stored = load i32, ptr %buffer
-  ; CHECK-COUNT-2: sub i32 %stored, 42
+  ; CHECK: sub i32 %stored, 42
+  ; CHECK: sub i32 %{{[^ ,]*barrier[^ ,]*}}, 42
   %difference = sub i32 %stored, 42
   ret i32 %difference
 }

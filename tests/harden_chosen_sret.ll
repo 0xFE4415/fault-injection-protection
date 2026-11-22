@@ -23,7 +23,8 @@ define dso_local i32 @main() local_unnamed_addr {
   %result_ptr = getelementptr inbounds [1 x i32], ptr %result, i64 0, i64 0
   ; CHECK: load volatile i32
   %val = load volatile  i32, ptr %result_ptr, align 4
-  ; CHECK-COUNT-2: sub i32 42
+  ; CHECK: sub i32 42
+  ; CHECK: sub i32 %{{[^ ,]*barrier[^ ,]*}}, %
   %s1 = sub i32 42, %val
 
   ; CHECK: br i1

@@ -1,3 +1,4 @@
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/Attributes.h"
@@ -103,8 +104,44 @@ BasicBlock *edge_block_for_check(CondBrInst *branch_inst, unsigned index) {
   return edge_block;
 }
 
+Value *reload_through_volatile_slot(
+    Value *value, Instruction *insert_before,
+    DenseMap<Type *, AllocaInst *> &barrier_slots) {
+  const bool is_volatile = true;
+  auto *type = value->getType();
+  auto *&slot = barrier_slots[type];
+  if (!slot) {
+    IRBuilder<> alloca_builder(
+        &insert_before->getFunction()->getEntryBlock().front());
+    slot = alloca_builder.CreateAlloca(type, nullptr, "barrier_slot");
+  }
+  IRBuilder<> builder(insert_before);
+  builder.CreateStore(value, slot, is_volatile);
+  return builder.CreateLoad(type, slot, is_volatile, "barrier");
+}
+
+void reload_incoming_values_through_volatile_slot(
+    PHINode *phi, DenseMap<Type *, AllocaInst *> &barrier_slots) {
+  DenseMap<BasicBlock *, Value *> reloaded_per_block;
+  for (unsigned index = 0; index < phi->getNumIncomingValues(); ++index) {
+    auto *incoming_block = phi->getIncomingBlock(index);
+    auto *incoming_value = phi->getIncomingValue(index);
+    auto *terminator = incoming_block->getTerminator();
+    if (terminator->isEHPad() || incoming_value == terminator)
+      continue;
+
+    auto [entry, inserted] =
+        reloaded_per_block.try_emplace(incoming_block, nullptr);
+    if (inserted)
+      entry->second = reload_through_volatile_slot(incoming_value, terminator,
+                                                   barrier_slots);
+    phi->setIncomingValue(index, entry->second);
+  }
+}
+
 bool add_redundancy(llvm::Instruction *fault_detected_ptr, llvm::Instruction *instruction,
                     bool atomic_state, llvm::BasicBlock *error_bb,
+                    DenseMap<Type *, AllocaInst *> &barrier_slots,
                     DenseSet<Value *> *users_of_critical_values = nullptr,
                     DenseSet<Function *> *cloned_functions = nullptr) {
   // the cloned_functions must be present if users_of_critical_values is
@@ -287,16 +324,25 @@ else
     tmp2->setName("tmp2");
     builder.Insert(tmp2);
 
+    if (auto *tmp2_phi = dyn_cast<PHINode>(tmp2))
+      reload_incoming_values_through_volatile_slot(tmp2_phi, barrier_slots);
+    else
+      tmp2->setOperand(0, reload_through_volatile_slot(tmp2->getOperand(0),
+                                                       tmp2, barrier_slots));
+
     if (isa<PHINode>(instruction))
       builder.SetInsertPoint(block, block->getFirstInsertionPt());
+
+    auto *second_result = reload_through_volatile_slot(
+        tmp2, &*builder.GetInsertPoint(), barrier_slots);
 
     // tmp1 != tmp2
     if (is_supported_by_cmp) {
       local_fault_detected =
-          builder.CreateICmpNE(tmp1, tmp2, "is_fault_detected");
+          builder.CreateICmpNE(tmp1, second_result, "is_fault_detected");
     } else if (is_supported_by_fcmp) {
       local_fault_detected =
-          builder.CreateFCmpONE(tmp1, tmp2, "is_fault_detected");
+          builder.CreateFCmpONE(tmp1, second_result, "is_fault_detected");
     } else {
       assert(0 && "unsupported op");
     }
@@ -497,10 +543,11 @@ size_t harden_fn_args(Function *function,
 
   auto *error_bb = insert_error_bb(*function);
 
+  DenseMap<Type *, AllocaInst *> barrier_slots;
   bool modified = false;
   for (auto *user : in_function_order(*function, insts)) {
     modified |= add_redundancy(fault_detected_ptr, user, atomic_state,
-                               check_asap ? error_bb : nullptr,
+                               check_asap ? error_bb : nullptr, barrier_slots,
                                &users_of_critical_values, cloned_functions);
   }
   if (modified)
@@ -545,10 +592,11 @@ size_t harden_chosen(Function &function, DenseSet<Function *> *cloned_functions,
 
   auto *error_bb = insert_error_bb(function);
 
+  DenseMap<Type *, AllocaInst *> barrier_slots;
   bool modified = false;
   for (auto *user : in_function_order(function, insts)) {
     modified |= add_redundancy(fault_detected_ptr, user, atomic_state,
-                               check_asap ? error_bb : nullptr,
+                               check_asap ? error_bb : nullptr, barrier_slots,
                                &users_of_critical_values, cloned_functions);
   }
   if (modified)
@@ -650,13 +698,15 @@ size_t harden_all(Function &function,
     instructions.push_back(&*inst);
   }
 
+  DenseMap<Type *, AllocaInst *> barrier_slots;
   bool modified = false;
   for (auto *i : instructions) {
     if (i) {
       // we are hardening everything we can in each function
       // thus we do not need to recurse into function calls
       modified |= add_redundancy(fault_detected_ptr, i, atomic_state,
-                                 check_asap ? error_bb : nullptr);
+                                 check_asap ? error_bb : nullptr,
+                                 barrier_slots);
     }
   }
   if (modified)

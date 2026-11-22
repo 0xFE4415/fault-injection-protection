@@ -10,7 +10,7 @@ t1:
   br label %t0
 ; CHECK-LABEL: {{^}}t0:{{.*}}; preds = %entry.t0_crit_edge, %t1{{$}}
 ; CHECK: mul i32 %a, 3
-; CHECK-NEXT: mul i32 %a, 3
+; CHECK: mul i32 %{{[^ ,]*barrier[^ ,]*}}, 3
 ; CHECK-NOT: mul
 t0:
   %r = mul i32 %a, 3

@@ -25,9 +25,10 @@ define i32 @add_fn(i32 %0, i32 %1) {
 define dso_local i32 @main() local_unnamed_addr {
   %val = call i32 @cfip_harden_var_(i32 noundef 42)
   ; scalar add
-  ; CHECK-COUNT-2: add i32 1, 42 
+  ; CHECK: add i32 1, 42
+  ; CHECK: add i32 %{{[^ ,]*barrier[^ ,]*}}, 42
   %s1 = add i32 1, %val
-  ; CHECK: icmp ne i32 %1, %2
+  ; CHECK: icmp ne i32 %1, %{{[^ ,]*barrier[^ ,]*}}
   ; CHECK: %3 = zext i1 %is_fault_detected
   ; CHECK: or i8 0, %3
 
@@ -42,7 +43,8 @@ define dso_local i32 @main() local_unnamed_addr {
   %vec = insertelement <4 x i32> %vec2, i32 %sum, i32 3
   
   ; vector add
-  ; CHECK-COUNT-2: add <4 x i32> <i32 12, i32 23, i32 34, i32 -28>, %vec
+  ; CHECK: add <4 x i32> <i32 12, i32 23, i32 34, i32 -28>, %vec
+  ; CHECK: add <4 x i32> %{{[^ ,]*barrier[^ ,]*}}, %vec
   %vec_sum = add <4 x i32> <i32 12, i32 23, i32 34, i32 -28> , %vec
   ; Vector additionally has to be reduced
   ; CHECK: call i1 @llvm.vector.reduce.or.v4i1(<4 x i1> %is_fault_detected
@@ -50,7 +52,8 @@ define dso_local i32 @main() local_unnamed_addr {
 
   ; CHECK: %reduced = call i32 @llvm.vector.reduce.add.v4i32 
   %reduced = call i32 @llvm.vector.reduce.add.v4i32(<4 x i32> %vec_sum)
-  ; CHECK-COUNT-2: add i32 %reduced, %sum
+  ; CHECK: add i32 %reduced, %sum
+  ; CHECK: add i32 %{{[^ ,]*barrier[^ ,]*}}, %sum
   %total = add i32 %reduced, %sum
   ; CHECK: icmp ne i32
   ; CHECK: or i8
@@ -72,7 +75,8 @@ define dso_local i32 @main() local_unnamed_addr {
   ; not an user of critical, thus occurs only once
   ; CHECK: %s1 = add i32 0, %0
   ; user of critical value, expect twice
-  ; CHECK-COUNT-2: add i32 %s1, %1
+  ; CHECK: add i32 %s1, %1
+  ; CHECK: add i32 %{{[^ ,]*barrier[^ ,]*}}, %1
 ; CHECK-LABEL: ret_block
   ; CHECK: ret i32
 ; CHECK-LABEL: error_handling:                                   ; preds = %2
