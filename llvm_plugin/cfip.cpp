@@ -113,7 +113,9 @@ BasicBlock *edge_block_for_check(SwitchInst *switch_inst,
   while (switch_inst->getSuccessor(successor_index) != successor)
     ++successor_index;
 
-  auto options = CriticalEdgeSplittingOptions().setMergeIdenticalEdges();
+  auto options = CriticalEdgeSplittingOptions()
+                     .setMergeIdenticalEdges()
+                     .setKeepOneInputPHIs();
   auto *edge_block = SplitCriticalEdge(switch_inst, successor_index, options);
   if (edge_block)
     return edge_block;
