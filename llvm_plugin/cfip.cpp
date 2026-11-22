@@ -584,10 +584,16 @@ llvm::Value *unwrap_call(llvm::CallInst *opaque_call,
   if (opaque_call->hasStructRetAttr()) {
     auto *sret_arg = opaque_call->getArgOperand(0);
     auto *byvalue_arg = opaque_call->getArgOperand(1);
+    const DataLayout &data_layout = opaque_call->getDataLayout();
+    const TypeSize value_size = data_layout.getTypeAllocSize(
+        opaque_call->getParamStructRetType(0));
 
-    sret_arg->replaceAllUsesWith(byvalue_arg);
+    // byval hands the callee its own copy, so the input may overlap the result
+    value_unwrapper_builder.CreateMemMove(
+        sret_arg, sret_arg->getPointerAlignment(data_layout), byvalue_arg,
+        byvalue_arg->getPointerAlignment(data_layout), value_size);
     opaque_call->eraseFromParent();
-    return byvalue_arg;
+    return sret_arg;
   } else {
     auto *opaque_value_ptr = alloca_builder.CreateAlloca(
         opaque_call->getType(), nullptr, "unwrapped_value");
