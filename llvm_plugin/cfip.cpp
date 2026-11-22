@@ -475,11 +475,12 @@ llvm::Value *unwrap_call(llvm::CallInst *opaque_call,
   // it's no longer needed thus we unwrap them:
   // before: critical_var = opaque_call(start_value)
   // after: critical_var = start_value
-  auto *called_function = opaque_call->getCalledFunction();
 
   // THIS WILL CAUSE A VERY SPECTACULAR CRASH IF LLVM FOR SOME REASON DECIDES
   // THAT SRET SHALL BE USED ON THE 2nd ARGUMENT INSTEAD OF THE 1st
-  if (called_function->hasStructRetAttr()) {
+  // the call site, not the declaration: LTO can merge same-named markers of
+  // different types into one declaration
+  if (opaque_call->hasStructRetAttr()) {
     auto *sret_arg = opaque_call->getArgOperand(0);
     auto *byvalue_arg = opaque_call->getArgOperand(1);
 
