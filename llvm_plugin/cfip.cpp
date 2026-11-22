@@ -162,11 +162,17 @@ bool add_redundancy(llvm::Instruction *fault_detected_ptr, llvm::Instruction *in
       }
       SmallVector<unsigned> args{};
 
+      const unsigned param_count = called_fn->getFunctionType()->getNumParams();
       for (unsigned i = 0; i < call_inst->arg_size(); i++) {
         auto *operand = call_inst->getArgOperand(i);
-        if (users_of_critical_values->contains(operand)) {
-          args.push_back(i);
+        if (!users_of_critical_values->contains(operand))
+          continue;
+        if (i >= param_count) {
+          errs() << "WARNING: critical value passed as a variadic argument to "
+                 << called_fn->getName() << " is not hardened in the callee\n";
+          continue;
         }
+        args.push_back(i);
       }
       // the call does not use any critical values
       if (args.empty()) {
