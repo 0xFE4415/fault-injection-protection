@@ -1,8 +1,8 @@
-; Cloning shared successors keeps SSA valid and the results unchanged for PHIs, loops and repeated edges.
+; The check of a shared successor goes on its own edge; SSA stays valid and the results stay unchanged for PHIs, loops and repeated edges.
 ; RUN: clang -w %s -o %t.ref
 ; RUN: timeout 10 %t.ref > %t.ref.txt
 ; RUN: opt -passes='cfip<harden-all>' -load-pass-plugin=../build/lib/LLVMCfip.so %s -S -o %t.0.ll
-; RUN: FileCheck %s < %t.0.ll
+; RUN: FileCheck %s --implicit-check-not=.clone < %t.0.ll
 ; RUN: clang -w %t.0.ll -o %t.0
 ; RUN: timeout 10 %t.0 | diff %t.ref.txt -
 ; RUN: opt -passes='cfip<harden-all;check-asap>' -load-pass-plugin=../build/lib/LLVMCfip.so %s -S -o %t.1.ll
@@ -20,9 +20,12 @@ declare i32 @printf(ptr, ...)
 
 ; The branch in loop targets loop itself, so the predecessor and the successor are the same block.
 ; CHECK-LABEL: define i32 @self_loop(
-; CHECK: label %loop.clone, label %exit.clone
-; CHECK-LABEL: {{^}}loop.clone:
-; CHECK: label %loop, label %exit
+; CHECK: br i1 %{{[0-9]+}}, label %loop.loop_crit_edge, label %exit
+; CHECK-LABEL: {{^}}loop.loop_crit_edge:{{.*}}; preds = %loop{{$}}
+; CHECK-NEXT: icmp ne i1 %unexpected_result, true
+; CHECK: br label %loop
+; CHECK-LABEL: {{^}}exit:{{.*}}; preds = %loop{{$}}
+; CHECK: icmp ne i1 %unexpected_result, false
 define i32 @self_loop(i32 %n) {
 entry:
   br label %loop
@@ -39,9 +42,35 @@ exit:
   ret i32 %r2
 }
 
+; The branch in loop targets loop itself on the false edge and exits on the true edge.
+; CHECK-LABEL: define i32 @self_loop_exit_on_true(
+; CHECK: br i1 %{{[0-9]+}}, label %exit, label %loop.loop_crit_edge
+; CHECK-LABEL: {{^}}loop.loop_crit_edge:{{.*}}; preds = %loop{{$}}
+; CHECK-NEXT: icmp ne i1 %unexpected_result, false
+; CHECK: br label %loop
+; CHECK-LABEL: {{^}}exit:{{.*}}; preds = %loop{{$}}
+; CHECK-NEXT: icmp ne i1 %unexpected_result, true
+define i32 @self_loop_exit_on_true(i32 %a, i32 %b) {
+entry:
+  br label %loop
+loop:
+  %x = phi i32 [ %a, %entry ], [ %y, %loop ]
+  %y = phi i32 [ %b, %entry ], [ %rem, %loop ]
+  %rem = srem i32 %x, %y
+  %done = icmp eq i32 %rem, 0
+  br i1 %done, label %exit, label %loop
+exit:
+  ret i32 %y
+}
+
 ; Both edges of the branch in pre target m.
 ; CHECK-LABEL: define i32 @same_target(
-; CHECK: label %m.clone, label %m.clone1
+; CHECK: br i1 %c, label %[[TRUE_EDGE:pre.m_crit_edge[0-9]*]], label %[[FALSE_EDGE:pre.m_crit_edge[0-9]*]]
+; CHECK-DAG: {{^}}[[TRUE_EDGE]]:{{.*}}; preds = %pre{{$}}
+; CHECK-DAG: {{^}}[[FALSE_EDGE]]:{{.*}}; preds = %pre{{$}}
+; CHECK-LABEL: {{^}}m:
+; CHECK-NEXT: phi i8
+; CHECK-NEXT: phi i32 [ %{{[0-9]+}}, %[[TRUE_EDGE]] ], [ %{{[0-9]+}}, %[[FALSE_EDGE]] ], [ 100, %other ]
 define i32 @same_target(i1 %c, i1 %d, i32 %a) {
 entry:
   br i1 %d, label %other, label %pre
@@ -57,7 +86,12 @@ m:
 }
 
 ; CHECK-LABEL: define i32 @phi_in_shared(
-; CHECK: {{^}}join:{{.*}}; preds = %small.clone, %big.clone, %small, %big
+; CHECK: br i1 %c, label %t1, label %entry.t0_crit_edge
+; CHECK-LABEL: {{^}}entry.t0_crit_edge:{{.*}}; preds = %entry{{$}}
+; CHECK-NEXT: icmp ne i1 %unexpected_result, false
+; CHECK: br label %t0
+; CHECK-LABEL: {{^}}t0:{{.*}}; preds = %entry.t0_crit_edge, %t1{{$}}
+; CHECK-LABEL: {{^}}join:{{.*}}; preds = %small, %big{{$}}
 define i32 @phi_in_shared(i1 %c, i32 %a, i32 %b) {
 entry:
   %s0 = add i32 %a, 1
@@ -81,8 +115,10 @@ join:
 }
 
 ; CHECK-LABEL: define i32 @nested_loops(
-; CHECK-LABEL: {{^}}inner.clone:
-; CHECK-LABEL: {{^}}outer.latch.clone:
+; CHECK-LABEL: {{^}}inner:{{.*}}; preds = %inner.inner_crit_edge, %outer{{$}}
+; CHECK-LABEL: {{^}}inner.inner_crit_edge:{{.*}}; preds = %inner{{$}}
+; CHECK-LABEL: {{^}}outer.latch:{{.*}}; preds = %inner{{$}}
+; CHECK-LABEL: {{^}}outer.latch.outer_crit_edge:{{.*}}; preds = %outer.latch{{$}}
 define i32 @nested_loops(i32 %n) {
 entry:
   br label %outer
@@ -106,13 +142,14 @@ exit:
   ret i32 %sum.inner
 }
 
-; The branch in latch targets the loop header, so the PHI in the cloned header uses a value
-; that reaches latch from both the header and its clone.
+; The branch in latch targets the loop header, which is also reached from entry.
 ; CHECK-LABEL: define i64 @count_zero_flags(
-; CHECK-LABEL: {{^}}latch:
-; CHECK: [[I:%[0-9]+]] = phi i64 {{.*}}%header.clone{{.*}}%header
-; CHECK-LABEL: {{^}}header.clone:
-; CHECK-NEXT: phi i64 [ [[I]], %latch ]
+; CHECK-LABEL: {{^}}header:{{.*}}; preds = %latch.header_crit_edge, %entry{{$}}
+; CHECK-LABEL: {{^}}latch:{{.*}}; preds = %header{{$}}
+; CHECK: br i1 %{{[0-9]+}}, label %exit, label %latch.header_crit_edge
+; CHECK-LABEL: {{^}}latch.header_crit_edge:{{.*}}; preds = %latch{{$}}
+; CHECK-NEXT: icmp ne i1 %unexpected_result{{[0-9]*}}, false
+; CHECK: br label %header
 define i64 @count_zero_flags(ptr %flags) {
 entry:
   br label %header
@@ -146,6 +183,10 @@ define i32 @main() {
   call i32 (ptr, ...) @printf(ptr @fmt, i32 %a)
   %b = call i32 @self_loop(i32 5)
   call i32 (ptr, ...) @printf(ptr @fmt, i32 %b)
+  %g1 = call i32 @self_loop_exit_on_true(i32 1, i32 17)
+  call i32 (ptr, ...) @printf(ptr @fmt, i32 %g1)
+  %g2 = call i32 @self_loop_exit_on_true(i32 84, i32 36)
+  call i32 (ptr, ...) @printf(ptr @fmt, i32 %g2)
   %c1 = call i32 @same_target(i1 true, i1 false, i32 3)
   call i32 (ptr, ...) @printf(ptr @fmt, i32 %c1)
   %c2 = call i32 @same_target(i1 false, i1 true, i32 3)
