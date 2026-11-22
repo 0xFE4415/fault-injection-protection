@@ -3,6 +3,7 @@ use std::sync::atomic;
 
 use proc_macro::{Span, TokenStream};
 use quote::ToTokens;
+use syn::punctuated::Punctuated;
 use syn::visit_mut::{self, VisitMut};
 
 static IDX: atomic::AtomicUsize = atomic::AtomicUsize::new(0);
@@ -27,15 +28,6 @@ impl HardenVariable {
             Err(not_hardened)
         }
     }
-}
-
-// TODO: Replace this with https://docs.rs/syn/latest/syn/meta/fn.parser.html
-fn read_from_attr(attrs: TokenStream) -> Vec<String> {
-    attrs
-        .into_iter()
-        .filter(|attr| matches!(attr, proc_macro::TokenTree::Ident(_)))
-        .map(|attr| attr.to_string())
-        .collect::<Vec<_>>()
 }
 
 fn harden_init(stmt_init: &mut syn::LocalInit, ty: &Box<syn::Type>) {
@@ -100,7 +92,12 @@ impl VisitMut for HardenVariable {
 
 #[proc_macro_attribute]
 pub fn harden_vars_fn(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let mut harden = HardenVariable::new(read_from_attr(attr));
+    let requested_names = syn::parse_macro_input!(attr with Punctuated::<syn::Ident, syn::Token![,]>::parse_terminated);
+    let requested = requested_names
+        .iter()
+        .map(|name| name.to_string())
+        .collect();
+    let mut harden = HardenVariable::new(requested);
     let mut item_fn = syn::parse_macro_input!(item as syn::ItemFn);
     harden.visit_item_fn_mut(&mut item_fn);
     harden.check().unwrap_or_else(|not_hardened| {
