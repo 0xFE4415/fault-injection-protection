@@ -1,6 +1,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Analysis/CFG.h"
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/IRBuilder.h"
@@ -106,6 +107,99 @@ BasicBlock *edge_block_for_check(CondBrInst *branch_inst, unsigned index) {
   return edge_block;
 }
 
+BasicBlock *edge_block_for_check(SwitchInst *switch_inst,
+                                 BasicBlock *successor) {
+  unsigned successor_index = 0;
+  while (switch_inst->getSuccessor(successor_index) != successor)
+    ++successor_index;
+
+  auto options = CriticalEdgeSplittingOptions().setMergeIdenticalEdges();
+  auto *edge_block = SplitCriticalEdge(switch_inst, successor_index, options);
+  if (edge_block)
+    return edge_block;
+  assert(!isCriticalEdge(switch_inst, successor_index,
+                         options.MergeIdenticalEdges) &&
+         "a critical switch edge must be split for its check");
+  return successor;
+}
+
+struct SwitchSuccessorCases {
+  BasicBlock *successor;
+  SmallVector<ConstantInt *> case_values;
+};
+
+// before:
+//   switch cond, default [ c1 -> s1, c2 -> s2 ]
+// after:
+//   chosen_case = cond
+//   switch cond, default [ c1 -> s1, c2 -> s2 ]
+// s1:
+//   fault_detected |= chosen_case != c1
+// default:
+//   fault_detected |= chosen_case == c1 || chosen_case == c2
+bool harden_switch(Instruction *fault_detected_ptr, SwitchInst *switch_inst) {
+  auto *default_successor = switch_inst->getDefaultDest();
+  SmallVector<SwitchSuccessorCases> successors{{default_successor, {}}};
+  for (auto switch_case : switch_inst->cases()) {
+    auto *successor = switch_case.getCaseSuccessor();
+    auto *existing = find_if(successors, [successor](const auto &entry) {
+      return entry.successor == successor;
+    });
+    if (existing == successors.end())
+      successors.push_back({successor, {switch_case.getCaseValue()}});
+    else
+      existing->case_values.push_back(switch_case.getCaseValue());
+  }
+  // a single successor has no direction to check
+  if (successors.size() < 2)
+    return false;
+
+  SmallVector<ConstantInt *> cases_leaving_default;
+  for (auto switch_case : switch_inst->cases()) {
+    if (switch_case.getCaseSuccessor() != default_successor)
+      cases_leaving_default.push_back(switch_case.getCaseValue());
+  }
+
+  auto *function = switch_inst->getFunction();
+  auto *cond = switch_inst->getCondition();
+  auto *cond_ty = cond->getType();
+
+  IRBuilder<> builder(&function->getEntryBlock().front());
+  auto *chosen_case = builder.CreateAlloca(cond_ty, nullptr, "chosen_case");
+  builder.SetInsertPoint(switch_inst);
+  builder.CreateStore(cond, chosen_case);
+
+  auto *i8_ty = builder.getInt8Ty();
+  for (const auto &entry : successors) {
+    const bool is_default = entry.successor == default_successor;
+    auto *check_block = edge_block_for_check(switch_inst, entry.successor);
+    builder.SetInsertPoint(&*check_block->getFirstInsertionPt());
+
+    auto *chosen_value = builder.CreateLoad(cond_ty, chosen_case, false);
+    const auto &listed_cases =
+        is_default ? cases_leaving_default : entry.case_values;
+    assert(!listed_cases.empty() &&
+           "a switch with two successors has a case leaving each of them");
+    Value *matches_listed_case = nullptr;
+    for (auto *case_value : listed_cases) {
+      auto *matches_case = builder.CreateICmpEQ(chosen_value, case_value);
+      matches_listed_case =
+          matches_listed_case
+              ? builder.CreateOr(matches_listed_case, matches_case)
+              : matches_case;
+    }
+    auto *switch_fault =
+        is_default ? matches_listed_case : builder.CreateNot(matches_listed_case);
+    switch_fault->setName("switch_fault");
+
+    builder.CreateStore(
+        builder.CreateOr(builder.CreateLoad(i8_ty, fault_detected_ptr, false),
+                         builder.CreateZExt(switch_fault, i8_ty)),
+        fault_detected_ptr);
+  }
+  return true;
+}
+
 Value *reload_through_volatile_slot(
     Value *value, Instruction *insert_before,
     DenseMap<Type *, AllocaInst *> &barrier_slots) {
@@ -204,6 +298,7 @@ bool add_redundancy(llvm::Instruction *fault_detected_ptr, llvm::Instruction *in
       call_inst->setCalledFunction(cloned_function);
     }
   }
+  // TODO: branch and switch checks ignore atomic_state and check_asap
   if (isa<llvm::UncondBrInst>(instruction) or
       isa<llvm::CondBrInst>(instruction)) {
     if (auto branch_inst = dyn_cast<llvm::CondBrInst>(instruction)) {
@@ -281,6 +376,9 @@ else
 
     return true;
   }
+
+  if (auto *switch_inst = dyn_cast<SwitchInst>(instruction))
+    return harden_switch(fault_detected_ptr, switch_inst);
 
   Value *local_fault_detected{0};
   IRBuilder<> builder(instruction);
