@@ -24,8 +24,8 @@ using namespace llvm;
 
 namespace {
 
-void getUsersRec(Value *const User, DenseSet<Value *> &All,
-                 DenseSet<Instruction *> &Insts) {
+void getUsersRec(Value *const User, const Function &Owner,
+                 DenseSet<Value *> &All, DenseSet<Instruction *> &Insts) {
   std::vector<Value *> toProcess;
   DenseSet<Value *> visited;
   toProcess.push_back(User);
@@ -40,6 +40,10 @@ void getUsersRec(Value *const User, DenseSet<Value *> &All,
     }
 
     if (auto inst = dyn_cast<Instruction>(currentUser)) {
+      // a tainted global is used by other functions too, they are not hardened
+      // with the state of this function
+      if (inst->getFunction() != &Owner)
+        continue;
       Insts.insert(inst);
     }
 
@@ -466,7 +470,8 @@ size_t harden_fn_args(Function *function,
   DenseSet<Value *> users_of_critical_values;
   DenseSet<Instruction *> insts;
   for (const auto &arg : args) {
-    getUsersRec(function->getArg(arg), users_of_critical_values, insts);
+    getUsersRec(function->getArg(arg), *function, users_of_critical_values,
+                insts);
   }
   if (users_of_critical_values.empty()) {
     return 0;
@@ -513,7 +518,7 @@ size_t harden_chosen(Function &function, DenseSet<Function *> *cloned_functions,
       continue;
     }
 
-    getUsersRec(critical_value_use, users_of_critical_values, insts);
+    getUsersRec(critical_value_use, function, users_of_critical_values, insts);
   }
 
   if (users_of_critical_values.empty()) {
