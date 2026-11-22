@@ -61,18 +61,15 @@ void getUsersRec(Value *const User, const Function &Owner,
         toProcess.push_back(user);
     }
 
-    // it's impossible to tell what the function actually does with parameters
-    // when it's just a declaration, thus we assume that all pointer operands
-    // are tainted
+    // the callee may write a critical value through any pointer argument: a
+    // declaration's body is unknown, and the taint inside a defined callee
+    // does not follow derived pointers back to its parameter, thus we assume
+    // that all pointer operands are tainted
     if (auto ci = dyn_cast<CallBase>(currentUser)) {
-      auto called_fn = ci->getCalledFunction();
-
-      if (!called_fn || called_fn->isDeclaration()) {
-        for (unsigned i = 0; i < ci->arg_size(); ++i) {
-          auto arg = ci->getArgOperand(i);
-          if (arg->getType()->isPointerTy() && !visited.contains(arg)) {
-            toProcess.push_back(arg);
-          }
+      for (unsigned i = 0; i < ci->arg_size(); ++i) {
+        auto arg = ci->getArgOperand(i);
+        if (arg->getType()->isPointerTy() && !visited.contains(arg)) {
+          toProcess.push_back(arg);
         }
       }
     }
