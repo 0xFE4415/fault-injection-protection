@@ -1,6 +1,7 @@
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/Attributes.h"
+#include "llvm/IR/CFG.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InstIterator.h"
@@ -18,6 +19,7 @@
 #include "llvm/Transforms/Scalar/DCE.h"
 #include "llvm/Transforms/Scalar/SROA.h"
 #include "llvm/Transforms/Utils/Cloning.h"
+#include "llvm/Transforms/Utils/SSAUpdater.h"
 
 using namespace llvm;
 #define DEBUG_TYPE "cfip"
@@ -90,6 +92,70 @@ std::string makeHardenedFunctionNameSuffix(SmallVector<unsigned> &args) {
 size_t harden_fn_args(Function *function,
                       DenseSet<Function *> *cloned_functions, bool atomic_state,
                       bool check_asap, SmallVector<unsigned> &args);
+
+BasicBlock *
+clone_shared_successor(CondBrInst *branch_inst, unsigned index,
+                       DenseSet<Value *> *users_of_critical_values) {
+  auto *successor = branch_inst->getSuccessor(index);
+  if (!successor->hasNPredecessorsOrMore(2))
+    return successor;
+
+  auto *predecessor = branch_inst->getParent();
+  ValueToValueMapTy VMap;
+  auto *cloned_bb =
+      CloneBasicBlock(successor, VMap, ".clone", branch_inst->getFunction());
+
+  remapInstructionsInBlocks({cloned_bb}, VMap);
+
+  for (auto &phi : successor->phis()) {
+    auto *cloned_phi = cast<PHINode>(VMap[&phi]);
+    while (cloned_phi->getNumIncomingValues() > 0)
+      cloned_phi->removeIncomingValue(0u, false);
+    cloned_phi->addIncoming(phi.getIncomingValueForBlock(predecessor),
+                            predecessor);
+  }
+
+  for (auto *next : successors(cloned_bb)) {
+    for (auto &phi : next->phis()) {
+      Value *incoming = phi.getIncomingValueForBlock(successor);
+      if (Value *cloned_incoming = VMap.lookup(incoming))
+        incoming = cloned_incoming;
+      phi.addIncoming(incoming, cloned_bb);
+    }
+  }
+
+  for (auto &phi : successor->phis())
+    phi.removeIncomingValue(predecessor, false);
+  branch_inst->setSuccessor(index, cloned_bb);
+
+  for (auto &instruction : *successor) {
+    if (instruction.use_empty())
+      continue;
+
+    SmallVector<PHINode *> inserted_phis;
+    SSAUpdater ssa_updater(&inserted_phis);
+    ssa_updater.Initialize(instruction.getType(), instruction.getName());
+    ssa_updater.AddAvailableValue(successor, &instruction);
+    ssa_updater.AddAvailableValue(cloned_bb, VMap.lookup(&instruction));
+
+    for (auto &use : make_early_inc_range(instruction.uses())) {
+      auto *user = cast<Instruction>(use.getUser());
+      auto *user_bb = user->getParent();
+      if (auto *user_phi = dyn_cast<PHINode>(user))
+        user_bb = user_phi->getIncomingBlock(use);
+      if (user_bb == successor || user_bb == cloned_bb)
+        continue;
+      ssa_updater.RewriteUse(use);
+    }
+
+    if (users_of_critical_values &&
+        users_of_critical_values->contains(&instruction)) {
+      for (auto *inserted_phi : inserted_phis)
+        users_of_critical_values->insert(inserted_phi);
+    }
+  }
+  return cloned_bb;
+}
 
 bool add_redundancy(llvm::Instruction *fault_detected_ptr, llvm::Instruction *instruction,
                     bool atomic_state, llvm::BasicBlock *error_bb,
@@ -176,22 +242,11 @@ else
 */
       auto *function = branch_inst->getFunction();
       auto *cond = branch_inst->getCondition();
-      auto replace_successors_if_needed =
-          [function, branch_inst](unsigned int i, StringRef name) {
-            ValueToValueMapTy VMap;
-            auto *bb = branch_inst->getSuccessor(i);
-            if (bb->hasNPredecessorsOrMore(2)) {
-              auto *cloned_bb = CloneBasicBlock(bb, VMap, name, function);
-              remapInstructionsInBlocks({cloned_bb}, VMap);
-              branch_inst->setSuccessor(i, cloned_bb);
-              return cloned_bb;
-            } else {
-              return bb;
-            }
-          };
 
-      auto *true_bb = replace_successors_if_needed(0, ".clone");
-      auto *false_bb = replace_successors_if_needed(1, ".clone");
+      auto *true_bb =
+          clone_shared_successor(branch_inst, 0, users_of_critical_values);
+      auto *false_bb =
+          clone_shared_successor(branch_inst, 1, users_of_critical_values);
       // Create a variable to track the chosen branch
       IRBuilder<> builder(&function->getEntryBlock().front());
       auto *chosen_branch =
