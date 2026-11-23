@@ -28,7 +28,7 @@ using namespace llvm;
 namespace {
 
 void getUsersRec(Value *const User, const Function &Owner,
-                 DenseSet<Value *> &All, DenseSet<Instruction *> &Insts) {
+                 DenseSet<Value *> &All) {
   std::vector<Value *> toProcess;
   DenseSet<Value *> visited;
   toProcess.push_back(User);
@@ -47,13 +47,11 @@ void getUsersRec(Value *const User, const Function &Owner,
     if (!currentUser->hasUseList())
       continue;
 
-    if (auto inst = dyn_cast<Instruction>(currentUser)) {
-      // a tainted global is used by other functions too, they are not hardened
-      // with the state of this function
-      if (inst->getFunction() != &Owner)
-        continue;
-      Insts.insert(inst);
-    }
+    // a tainted global is used by other functions too, they are not hardened
+    // with the state of this function
+    if (auto inst = dyn_cast<Instruction>(currentUser);
+        inst && inst->getFunction() != &Owner)
+      continue;
 
     All.insert(currentUser);
 
@@ -584,10 +582,16 @@ llvm::Value *unwrap_call(llvm::CallInst *opaque_call,
   if (opaque_call->hasStructRetAttr()) {
     auto *sret_arg = opaque_call->getArgOperand(0);
     auto *byvalue_arg = opaque_call->getArgOperand(1);
+    const DataLayout &data_layout = opaque_call->getDataLayout();
+    const TypeSize value_size = data_layout.getTypeAllocSize(
+        opaque_call->getParamStructRetType(0));
 
-    sret_arg->replaceAllUsesWith(byvalue_arg);
+    // byval hands the callee its own copy, so the input may overlap the result
+    value_unwrapper_builder.CreateMemMove(
+        sret_arg, sret_arg->getPointerAlignment(data_layout), byvalue_arg,
+        byvalue_arg->getPointerAlignment(data_layout), value_size);
     opaque_call->eraseFromParent();
-    return byvalue_arg;
+    return sret_arg;
   } else {
     auto *opaque_value_ptr = alloca_builder.CreateAlloca(
         opaque_call->getType(), nullptr, "unwrapped_value");
@@ -618,13 +622,13 @@ llvm::Instruction *insert_bool(IRBuilder<> &alloca_builder, LLVMContext &Ctx) {
 }
 
 SmallVector<Instruction *>
-in_function_order(Function &function, const DenseSet<Instruction *> &insts) {
+in_function_order(Function &function,
+                  const DenseSet<Value *> &users_of_critical_values) {
   SmallVector<Instruction *> ordered;
   for (auto &instruction : instructions(function)) {
-    if (insts.contains(&instruction))
+    if (users_of_critical_values.contains(&instruction))
       ordered.push_back(&instruction);
   }
-  assert(ordered.size() == insts.size());
   return ordered;
 }
 
@@ -640,10 +644,8 @@ size_t harden_fn_args(Function *function,
   auto *fault_detected_ptr = insert_bool(alloca_builder, Ctx);
 
   DenseSet<Value *> users_of_critical_values;
-  DenseSet<Instruction *> insts;
   for (const auto &arg : args) {
-    getUsersRec(function->getArg(arg), *function, users_of_critical_values,
-                insts);
+    getUsersRec(function->getArg(arg), *function, users_of_critical_values);
   }
   if (users_of_critical_values.empty()) {
     return 0;
@@ -653,7 +655,7 @@ size_t harden_fn_args(Function *function,
 
   DenseMap<Type *, AllocaInst *> barrier_slots;
   bool modified = false;
-  for (auto *user : in_function_order(*function, insts)) {
+  for (auto *user : in_function_order(*function, users_of_critical_values)) {
     modified |= add_redundancy(fault_detected_ptr, user, atomic_state,
                                check_asap ? error_bb : nullptr, barrier_slots,
                                &users_of_critical_values, cloned_functions);
@@ -682,16 +684,17 @@ size_t harden_chosen(Function &function, DenseSet<Function *> *cloned_functions,
   auto *fault_detected_ptr = insert_bool(alloca_builder, Ctx);
 
   DenseSet<Value *> users_of_critical_values;
-  DenseSet<Instruction *> insts;
+  SmallVector<Value *, 1> critical_value_uses;
+  for (auto &opaque_call : opaque_calls)
+    critical_value_uses.push_back(unwrap_call(opaque_call, alloca_builder));
 
-  for (auto &opaque_call : opaque_calls) {
-    auto *critical_value_use = unwrap_call(opaque_call, alloca_builder);
+  for (auto *critical_value_use : critical_value_uses) {
     if (critical_value_use->use_empty()) {
       errs() << "WARNING: nothing to harden, value not used\n";
       continue;
     }
 
-    getUsersRec(critical_value_use, function, users_of_critical_values, insts);
+    getUsersRec(critical_value_use, function, users_of_critical_values);
   }
 
   if (users_of_critical_values.empty()) {
@@ -702,7 +705,7 @@ size_t harden_chosen(Function &function, DenseSet<Function *> *cloned_functions,
 
   DenseMap<Type *, AllocaInst *> barrier_slots;
   bool modified = false;
-  for (auto *user : in_function_order(function, insts)) {
+  for (auto *user : in_function_order(function, users_of_critical_values)) {
     modified |= add_redundancy(fault_detected_ptr, user, atomic_state,
                                check_asap ? error_bb : nullptr, barrier_slots,
                                &users_of_critical_values, cloned_functions);
