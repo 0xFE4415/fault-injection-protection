@@ -1,4 +1,4 @@
-; A hardened value that derives from another hardened value must not leave its erased marker call in the set of instructions to harden.
+; A hardened value that derives from another hardened value is hardened in both computations.
 ; RUN: opt -passes='cfip' -load-pass-plugin=../build/lib/LLVMCfip.so %s -S -o %t.ll
 ; RUN: FileCheck %s < %t.ll
 ; RUN: lli %t.ll
