@@ -7,11 +7,14 @@ RUN dnf install -y \
     gcc-c++ \
     git \
     gzip \
+    libasan \
+    libubsan \
     lld \
     llvm-devel \
     llvm-test \
     ninja-build \
     python3-lit \
+    python3-psutil \
     tar
 
 
@@ -20,6 +23,21 @@ WORKDIR /work
 RUN curl https://sh.rustup.rs -sSf | sh -s -- --default-toolchain=1.100.0 -y
 
 ADD ./ ./
+
+# BUILD llvm plugin with ASan and UBSan in debug config
+RUN rm -rf build
+RUN mkdir build && \
+    cd build && \
+    cmake .. -DCMAKE_BUILD_TYPE=Debug \
+        -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer" && \
+    cmake --build . && \
+    cd ..
+
+# LLVM tests with ASan and UBSan, skipping the Rust tests that take over 30s
+RUN printf 'leak:ld.bfd\n' > /tmp/lsan.supp && \
+    LD_PRELOAD="$(g++ -print-file-name=libasan.so.8)" \
+    LSAN_OPTIONS=suppressions=/tmp/lsan.supp \
+    lit tests -v --timeout=30 --filter-out '\.rs$'
 
 # BUILD llvm plugin
 RUN rm -rf build
